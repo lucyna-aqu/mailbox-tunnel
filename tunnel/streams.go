@@ -5,10 +5,19 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const readChunkBytes = 32 * 1024
+
+// bytesFromApps and bytesToApps count the traffic relayed for local connections.
+var bytesFromApps, bytesToApps atomic.Int64
+
+// TrafficTotals returns how many bytes have been relayed from and to local connections.
+func TrafficTotals() (sent, received int64) {
+	return bytesFromApps.Load(), bytesToApps.Load()
+}
 
 // inbox is an unbounded per-stream queue, so a slow connection cannot stall the others.
 type inbox struct {
@@ -134,6 +143,7 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 					time.Sleep(50 * time.Millisecond)
 				}
 				e.sender.Send(streamID, frameData, buffer[:n])
+				bytesFromApps.Add(int64(n))
 			}
 			if err != nil {
 				break
@@ -151,6 +161,7 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 			if _, err := conn.Write(data); err != nil {
 				break
 			}
+			bytesToApps.Add(int64(len(data)))
 		}
 		done <- struct{}{}
 	}()

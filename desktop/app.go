@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -22,10 +23,27 @@ const (
 // State is what the window shows.
 type State struct {
 	Configured  bool   `json:"configured"`
+	Node        string `json:"node"`
 	Status      string `json:"status"`
+	ConnectedAt int64  `json:"connectedAt"` // Unix milliseconds, 0 when not connected
 	Address     string `json:"address"`
 	SystemProxy bool   `json:"systemProxy"`
 	Error       string `json:"error"`
+}
+
+// Traffic is the total relayed for local applications.
+type Traffic struct {
+	Sent     int64 `json:"sent"`
+	Received int64 `json:"received"`
+}
+
+// nodeLabel is a short, stable name for a node: the start of its public key.
+func nodeLabel(nodeString string) string {
+	node, err := tunnel.ParseNodeInfo(nodeString)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", node.PublicKey[:4])
 }
 
 // App connects the window to the tunnel.
@@ -59,6 +77,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.mutex.Lock()
 	a.state.Configured = settings.DeploymentID != ""
+	a.state.Node = nodeLabel(settings.Node)
 	a.mutex.Unlock()
 }
 
@@ -95,6 +114,11 @@ func (a *App) State() State {
 	return a.state
 }
 
+func (a *App) Traffic() Traffic {
+	sent, received := tunnel.TrafficTotals()
+	return Traffic{Sent: sent, Received: received}
+}
+
 func (a *App) Logs() []string {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
@@ -109,19 +133,20 @@ func (a *App) SaveSettings(deploymentID, authKey, node string) string {
 		Node:         strings.TrimSpace(node),
 	}
 	if _, err := tunnel.ParseNodeInfo(settings.Node); err != nil {
-		return "کد node درست نیست."
+		return "That is not a valid node string."
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := tunnel.NewMailbox(settings.OwnMailbox()).Ping(ctx); err != nil {
 		log.Printf("mailbox check: %v", err)
-		return "صندوق پستی جواب نداد. شناسه و کلید را بررسی کنید."
+		return "Your mailbox did not answer. Check the deployment ID and the auth key."
 	}
 	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
 		return err.Error()
 	}
 	a.mutex.Lock()
 	a.state.Configured = true
+	a.state.Node = nodeLabel(settings.Node)
 	a.mutex.Unlock()
 	a.publish()
 	return ""
@@ -137,11 +162,11 @@ func (a *App) Connect() string {
 	}
 	settings, err := tunnel.LoadSettings(a.settingsPath)
 	if err != nil {
-		return "اول تنظیمات را وارد کنید."
+		return "Enter your settings first."
 	}
 	node, err := tunnel.ParseNodeInfo(settings.Node)
 	if err != nil {
-		return "کد node درست نیست."
+		return "That is not a valid node string."
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:1080")
 	if err != nil {
@@ -181,7 +206,7 @@ func (a *App) Connect() string {
 		}
 		a.mutex.Lock()
 		a.cancel, a.stopped = nil, nil
-		a.state.Status, a.state.Address, a.state.SystemProxy = statusDisconnected, "", false
+		a.state.Status, a.state.Address, a.state.SystemProxy, a.state.ConnectedAt = statusDisconnected, "", false, 0
 		a.mutex.Unlock()
 		a.publish()
 	}()
@@ -212,7 +237,7 @@ func (a *App) ResetSettings() {
 		return
 	}
 	a.mutex.Lock()
-	a.state.Configured = false
+	a.state.Configured, a.state.Node = false, ""
 	a.mutex.Unlock()
 	a.publish()
 }
@@ -221,6 +246,10 @@ func (a *App) setStatus(status tunnel.Status) {
 	a.mutex.Lock()
 	if a.cancel != nil {
 		a.state.Status = string(status)
+		a.state.ConnectedAt = 0
+		if status == tunnel.StatusConnected {
+			a.state.ConnectedAt = time.Now().UnixMilli()
+		}
 	}
 	a.mutex.Unlock()
 	a.publish()

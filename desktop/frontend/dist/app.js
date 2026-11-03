@@ -1,31 +1,44 @@
 const statusText = {
-  disconnected: "قطع",
-  connecting: "در حال اتصال…",
-  connected: "متصل",
+  disconnected: "Not connected",
+  connecting: "Connecting…",
+  connected: "Protected",
 };
 
 const $ = (id) => document.getElementById(id);
 const backend = () => window.go.main.App;
-let current = { status: "disconnected", configured: false };
+let current = { status: "disconnected", configured: false, connectedAt: 0 };
+let lastTraffic = null;
+
+function showPage(name) {
+  document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
+  document.querySelectorAll(".nav").forEach((button) => button.classList.toggle("active", button.dataset.page === name));
+}
+
+function formatDuration(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+}
+
+function formatRate(bytesPerSecond) {
+  if (bytesPerSecond >= 1024 * 1024) return (bytesPerSecond / 1024 / 1024).toFixed(1) + " MB/s";
+  if (bytesPerSecond >= 1024) return Math.round(bytesPerSecond / 1024) + " KB/s";
+  return Math.round(bytesPerSecond) + " B/s";
+}
 
 function render(state) {
   current = state;
-  $("dot").className = "dot " + state.status;
-  $("status-text").textContent = statusText[state.status] || state.status;
-  $("address").textContent = state.address
-    ? (state.systemProxy ? "پروکسی ویندوز: " : "پروکسی: ") + state.address
-    : "";
-
-  const toggle = $("toggle");
-  const running = state.status !== "disconnected";
-  toggle.textContent = running ? "قطع اتصال" : "اتصال";
-  toggle.classList.toggle("stop", running);
-  toggle.disabled = !state.configured;
-
+  document.body.className = state.status;
+  const connectedFor = state.connectedAt ? " • " + formatDuration(Date.now() - state.connectedAt) : "";
+  $("status-text").textContent = (statusText[state.status] || state.status) + connectedFor;
+  $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
+  $("node").textContent = state.node || "Not set";
+  $("proxy").textContent = state.address
+    ? state.address + (state.systemProxy ? " · Windows proxy on" : " · set your apps to use it")
+    : "Off";
+  $("timer").textContent = state.connectedAt ? formatDuration(Date.now() - state.connectedAt) : "--:--:--";
   $("reset").hidden = !state.configured;
-  if (!state.configured) {
-    $("settings-panel").open = true;
-  }
   showError(state.error);
 }
 
@@ -40,7 +53,28 @@ function appendLog(line) {
   log.scrollTop = log.scrollHeight;
 }
 
-$("toggle").addEventListener("click", async () => {
+async function tick() {
+  render(current);
+  const traffic = await backend().Traffic();
+  const now = Date.now();
+  if (lastTraffic && current.status !== "disconnected") {
+    const seconds = (now - lastTraffic.time) / 1000;
+    $("rate-down").textContent = formatRate((traffic.received - lastTraffic.received) / seconds);
+    $("rate-up").textContent = formatRate((traffic.sent - lastTraffic.sent) / seconds);
+  } else {
+    $("rate-down").textContent = $("rate-up").textContent = "0 B/s";
+  }
+  lastTraffic = { ...traffic, time: now };
+}
+
+document.querySelectorAll(".nav").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.page)));
+document.querySelectorAll("[data-goto]").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.goto)));
+
+$("power").addEventListener("click", async () => {
+  if (!current.configured) {
+    showPage("settings");
+    return;
+  }
   if (current.status === "disconnected") {
     showError(await backend().Connect());
   } else {
@@ -53,15 +87,15 @@ $("settings").addEventListener("submit", async (event) => {
   const message = $("settings-message");
   message.hidden = false;
   message.className = "message";
-  message.textContent = "در حال بررسی صندوق پستی…";
+  message.textContent = "Checking your mailbox…";
   $("save").disabled = true;
-  const error = await backend().SaveSettings($("deployment").value, $("key").value, $("node").value);
+  const error = await backend().SaveSettings($("deployment").value, $("key").value, $("node-input").value);
   $("save").disabled = false;
   message.className = error ? "message bad" : "message";
-  message.textContent = error || "ذخیره شد.";
+  message.textContent = error || "Saved.";
   if (!error) {
-    $("deployment").value = $("key").value = $("node").value = "";
-    $("settings-panel").open = false;
+    $("deployment").value = $("key").value = $("node-input").value = "";
+    showPage("home");
   }
 });
 
@@ -71,5 +105,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   window.runtime.EventsOn("state", render);
   window.runtime.EventsOn("log", appendLog);
   render(await backend().State());
+  if (!current.configured) showPage("settings");
   (await backend().Logs()).forEach(appendLog);
+  setInterval(tick, 1000);
 });

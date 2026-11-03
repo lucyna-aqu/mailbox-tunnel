@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,38 +7,96 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <nav class="sidebar">
+    <button class="nav active" data-page="home" type="button">
+      <svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>
+      <span>Connect</span>
+    </button>
+    <button class="nav" data-page="settings" type="button">
+      <svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+      <span>Settings</span>
+    </button>
+    <button class="nav" data-page="logs" type="button">
+      <svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h1M4 12h1M4 18h1"/></svg>
+      <span>Logs</span>
+    </button>
+    <button class="nav" data-page="help" type="button">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.7.3-1.2 1-1.2 1.7v.6"/><path d="M12 17.2v.1"/></svg>
+      <span>Help</span>
+    </button>
+  </nav>
+
   <main>
-    <section class="status">
-      <div id="dot" class="dot"></div>
-      <div id="status-text" class="status-text">قطع</div>
-      <div id="address" class="address" dir="ltr"></div>
+    <section id="page-home" class="page active">
+      <div class="hero">
+        <div class="glow"></div>
+        <button id="power" class="power" type="button" aria-label="Connect">
+          <svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>
+        </button>
+      </div>
+
+      <div class="status-line">
+        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+        <span id="status-text">Not connected</span>
+      </div>
+      <p id="error" class="error" hidden></p>
+
+      <div class="cards">
+        <button class="card wide link-card" data-goto="settings" type="button">
+          <div>
+            <div class="card-label">Node</div>
+            <div id="node" class="card-value">Not set</div>
+          </div>
+          <svg class="chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <div class="card">
+          <div class="card-label">Time connected</div>
+          <div id="timer" class="card-value big">--:--:--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Traffic</div>
+          <div class="card-value"><span class="down">↓</span> <span id="rate-down">0 B/s</span></div>
+          <div class="card-value"><span class="up">↑</span> <span id="rate-up">0 B/s</span></div>
+        </div>
+        <div class="card wide">
+          <div class="card-label">Proxy</div>
+          <div id="proxy" class="card-value">Off</div>
+        </div>
+      </div>
     </section>
 
-    <button id="toggle" class="toggle" type="button">اتصال</button>
-    <p id="error" class="error" hidden></p>
-
-    <details id="settings-panel" class="panel">
-      <summary>تنظیمات</summary>
+    <section id="page-settings" class="page">
+      <h1>Settings</h1>
       <form id="settings">
-        <label>شناسهٔ دیپلوی
-          <input id="deployment" dir="ltr" autocomplete="off" spellcheck="false" required>
+        <label>Deployment ID
+          <input id="deployment" autocomplete="off" spellcheck="false" required>
         </label>
-        <label>کلید (AUTH_KEY)
-          <input id="key" dir="ltr" autocomplete="off" spellcheck="false" required>
+        <label>Auth key
+          <input id="key" autocomplete="off" spellcheck="false" required>
         </label>
-        <label>کد node
-          <input id="node" dir="ltr" placeholder="mtn://…" autocomplete="off" spellcheck="false" required>
+        <label>Node
+          <input id="node-input" placeholder="mtn://…" autocomplete="off" spellcheck="false" required>
         </label>
-        <button id="save" type="submit">ذخیره</button>
+        <button id="save" class="primary" type="submit">Save</button>
         <p id="settings-message" class="message" hidden></p>
       </form>
-      <button id="reset" class="link" type="button" hidden>پاک کردن تنظیمات</button>
-    </details>
+      <button id="reset" class="text-button" type="button" hidden>Reset settings</button>
+    </section>
 
-    <details class="panel">
-      <summary>گزارش</summary>
-      <pre id="log" dir="ltr"></pre>
-    </details>
+    <section id="page-logs" class="page">
+      <h1>Logs</h1>
+      <pre id="log"></pre>
+    </section>
+
+    <section id="page-help" class="page">
+      <h1>Help</h1>
+      <ol class="steps">
+        <li>Deploy <code>Code.gs</code> as an Apps Script Web app in your Google account and copy its deployment ID.</li>
+        <li>Get a node string (<code>mtn://…</code>) from a node you trust.</li>
+        <li>Enter both in Settings, then press the power button.</li>
+      </ol>
+      <p class="note">While connected, the Windows proxy points at the tunnel. It is restored when you disconnect or close the app.</p>
+    </section>
   </main>
   <script src="app.js"></script>
 </body>
