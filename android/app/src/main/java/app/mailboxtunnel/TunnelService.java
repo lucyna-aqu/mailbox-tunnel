@@ -45,10 +45,14 @@ public class TunnelService extends VpnService {
             stopSelf();
             return START_NOT_STICKY;
         }
-        String error = Mobile.start(tun.detachFd());
-        if (!error.isEmpty()) {
-            Log.e(TAG, error);
-        }
+        // Start may first wait for an earlier connection to stop, so it stays off the main thread.
+        int fd = tun.detachFd();
+        new Thread(() -> {
+            String error = Mobile.start(fd);
+            if (!error.isEmpty()) {
+                Log.e(TAG, error);
+            }
+        }).start();
         return START_STICKY;
     }
 
