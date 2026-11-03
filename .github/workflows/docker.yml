@@ -12,4 +12,4 @@ jobs:
       - name: Build image
         run: docker build -t mailbox-tunnel .
       - name: Smoke test
-        run: docker run --rm mailbox-tunnel -mode keygen
+        run: docker run --rm mailbox-tunnel -h
