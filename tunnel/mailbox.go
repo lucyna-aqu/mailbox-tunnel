@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -22,6 +23,7 @@ import (
 const (
 	waitTimeout      = 20 * time.Second
 	callTimeout      = waitTimeout + 30*time.Second
+	connectTimeout   = 10 * time.Second
 	maxResponseBytes = 64 << 20
 )
 
@@ -35,8 +37,12 @@ type MailboxConfig struct {
 // Mailbox is an HTTP/2 client for the Apps Script mailbox with a Chrome TLS fingerprint.
 // Redirects are followed manually so they are fronted too.
 type Mailbox struct {
-	config MailboxConfig
-	client *http.Client
+	config  MailboxConfig
+	client  *http.Client
+	failing atomic.Bool
+
+	// Recovered gets a signal when a call succeeds after network failures, for example after sleep or a Wi-Fi change.
+	Recovered chan struct{}
 }
 
 func NewMailbox(config MailboxConfig) *Mailbox {
@@ -50,7 +56,9 @@ func NewMailbox(config MailboxConfig) *Mailbox {
 			if config.GoogleIP != "" {
 				dialAddress = net.JoinHostPort(config.GoogleIP, port)
 			}
-			rawConn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, network, dialAddress)
+			ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+			defer cancel()
+			rawConn, err := (&net.Dialer{}).DialContext(ctx, network, dialAddress)
 			if err != nil {
 				return nil, err
 			}
@@ -65,11 +73,14 @@ func NewMailbox(config MailboxConfig) *Mailbox {
 			}
 			return tlsConn, nil
 		},
-		ReadIdleTimeout: 30 * time.Second,
-		PingTimeout:     15 * time.Second,
+		// A connection that went silent, as after sleep or a network change, is found by a ping and dropped within seconds.
+		ReadIdleTimeout:  10 * time.Second,
+		PingTimeout:      5 * time.Second,
+		WriteByteTimeout: 10 * time.Second,
 	}
 	return &Mailbox{
-		config: config,
+		Recovered: make(chan struct{}, 1),
+		config:    config,
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -156,8 +167,8 @@ func (m *Mailbox) Version(ctx context.Context) (int, error) {
 	return 1, nil
 }
 
-func (m *Mailbox) call(ctx context.Context, request map[string]any) (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+func (m *Mailbox) call(parent context.Context, request map[string]any) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
 	started := time.Now()
 
@@ -168,13 +179,19 @@ func (m *Mailbox) call(ctx context.Context, request map[string]any) (map[string]
 	}
 	execURL := "https://script.google.com/macros/s/" + m.config.DeploymentID + "/exec"
 	status, location, content, err := m.do(ctx, http.MethodPost, execURL, body)
+	if err == nil && status >= 300 && status < 400 && location != "" {
+		status, _, content, err = m.do(ctx, http.MethodGet, location, nil)
+	}
 	if err != nil {
+		if parent.Err() == nil {
+			m.failing.Store(true)
+		}
 		return nil, err
 	}
-	if status >= 300 && status < 400 && location != "" {
-		status, _, content, err = m.do(ctx, http.MethodGet, location, nil)
-		if err != nil {
-			return nil, err
+	if m.failing.Swap(false) {
+		select {
+		case m.Recovered <- struct{}{}:
+		default:
 		}
 	}
 	if status != http.StatusOK {

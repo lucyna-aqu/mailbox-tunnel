@@ -91,6 +91,9 @@ func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) {
 		case <-time.After(registrationRefresh):
 		case <-c.sender.Stalled:
 			log.Printf("client: traffic stalled, checking the node")
+		case <-c.mailbox.Recovered:
+			// The node ends a session a minute after its client went quiet, so ask at once.
+			log.Printf("client: network is back, checking the node")
 		}
 	}
 }
