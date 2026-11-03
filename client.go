@@ -80,7 +80,12 @@ func (c *Client) keepRegistered(ctx context.Context) {
 			log.Printf("client: node lost run %s, reconnecting", c.runID)
 			return
 		}
-		sleepContext(ctx, registrationRefresh)
+		select {
+		case <-ctx.Done():
+		case <-time.After(registrationRefresh):
+		case <-c.sender.Stalled:
+			log.Printf("client: traffic stalled, checking the node")
+		}
 	}
 }
 

@@ -21,8 +21,9 @@ const (
 	sendParallelism = 6
 	receiveWindow   = 6
 
-	retransmitAfter = 6 * time.Second
-	statusInterval  = 3 * time.Second
+	retransmitAfter  = 6 * time.Second
+	statusInterval   = 3 * time.Second
+	stallRetransmits = 3
 )
 
 // appendFrame encodes one frame as stream id (4) + type (1) + length (4) + data.
@@ -78,6 +79,7 @@ type Sender struct {
 	progressSeenAt time.Time
 	wake           chan struct{}
 	slots          chan struct{}
+	Stalled        chan struct{}
 }
 
 // testDropEvery is set by the -test-drop-every flag.
@@ -92,6 +94,7 @@ func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher) *Sender {
 		retained:  map[int]*sentBatch{},
 		wake:      make(chan struct{}, 1),
 		slots:     make(chan struct{}, sendParallelism),
+		Stalled:   make(chan struct{}, 1),
 	}
 }
 
@@ -207,9 +210,11 @@ func (s *Sender) updateProgress(progress int) {
 }
 
 // retransmitLoop re-puts the batch the receiver is stuck on.
+// After stallRetransmits tries on the same batch it signals Stalled, since the receiver is probably gone.
 func (s *Sender) retransmitLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	lastStuck, stuckCount := -1, 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -236,6 +241,16 @@ func (s *Sender) retransmitLoop(ctx context.Context) {
 		s.mutex.Unlock()
 		if !stuck {
 			continue
+		}
+		if sequence != lastStuck {
+			lastStuck, stuckCount = sequence, 0
+		}
+		stuckCount++
+		if stuckCount == stallRetransmits {
+			select {
+			case s.Stalled <- struct{}{}:
+			default:
+			}
 		}
 		if !s.acquireSlot(ctx) {
 			return
