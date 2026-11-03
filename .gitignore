@@ -4,3 +4,4 @@
 *.exe~
 desktop/build/
 mailbox-tunnel.json
+mailbox-tunnel.log

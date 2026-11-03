@@ -6,7 +6,25 @@ import (
 	"path/filepath"
 )
 
-const SettingsFileName = "mailbox-tunnel.json"
+const (
+	SettingsFileName = "mailbox-tunnel.json"
+	LogFileName      = "mailbox-tunnel.log"
+	logFileLimit     = 2 << 20
+)
+
+// OpenLogFile opens the log file next to the executable, starting it over once it passes 2 MB.
+func OpenLogFile() (*os.File, error) {
+	path, err := SettingsPath()
+	if err != nil {
+		return nil, err
+	}
+	path = filepath.Join(filepath.Dir(path), LogFileName)
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if info, err := os.Stat(path); err == nil && info.Size() > logFileLimit {
+		flags |= os.O_TRUNC
+	}
+	return os.OpenFile(path, flags, 0o600)
+}
 
 // ProxySettings is the part of the Windows proxy configuration this program changes.
 type ProxySettings struct {

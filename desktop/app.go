@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -64,7 +65,11 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	log.SetOutput(logSink{a})
+	sink := io.Writer(logSink{a})
+	if file, err := tunnel.OpenLogFile(); err == nil {
+		sink = io.MultiWriter(sink, file)
+	}
+	log.SetOutput(sink)
 	path, err := tunnel.SettingsPath()
 	if err != nil {
 		a.setError(err.Error())

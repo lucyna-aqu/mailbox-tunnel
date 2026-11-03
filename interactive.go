@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -26,6 +28,9 @@ func runInteractive() {
 }
 
 func interactiveSession() error {
+	if file, err := tunnel.OpenLogFile(); err == nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, file))
+	}
 	path, err := tunnel.SettingsPath()
 	if err != nil {
 		return err

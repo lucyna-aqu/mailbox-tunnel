@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -198,6 +199,11 @@ func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (i
 	}
 	response, err := m.client.Do(request)
 	if err != nil {
+		// Drop the URL from the error: it contains the deployment ID, which must not end up in logs.
+		var urlError *url.Error
+		if errors.As(err, &urlError) {
+			err = urlError.Err
+		}
 		return 0, "", nil, err
 	}
 	defer response.Body.Close()

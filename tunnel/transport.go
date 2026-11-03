@@ -70,16 +70,17 @@ type Sender struct {
 	cipher    streamCipher
 	dropEvery int // loss testing
 
-	mutex          sync.Mutex
-	buffer         []byte
-	nextSequence   int
-	retained       map[int]*sentBatch
-	retainedBytes  int
-	progress       int
-	progressSeenAt time.Time
-	wake           chan struct{}
-	slots          chan struct{}
-	Stalled        chan struct{}
+	mutex           sync.Mutex
+	buffer          []byte
+	nextSequence    int
+	retained        map[int]*sentBatch
+	retainedBytes   int
+	progress        int
+	progressSeenAt  time.Time
+	progressMovedAt time.Time
+	wake            chan struct{}
+	slots           chan struct{}
+	Stalled         chan struct{}
 }
 
 // TestDropEvery is set by the -test-drop-every flag.
@@ -144,6 +145,9 @@ func (s *Sender) Run(ctx context.Context) {
 			s.nextSequence++
 			batch := s.cipher.seal(sequence, s.buffer[:size])
 			s.buffer = s.buffer[size:]
+			if len(s.retained) == 0 {
+				s.progressMovedAt = time.Now()
+			}
 			s.retained[sequence] = &sentBatch{data: batch, putting: true}
 			s.retainedBytes += len(batch)
 			s.mutex.Unlock()
@@ -196,11 +200,24 @@ func (s *Sender) finishPut(sequence int) {
 	}
 }
 
+// StuckFor is how long the receiver has taken nothing while batches were waiting for it.
+func (s *Sender) StuckFor() time.Duration {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if len(s.retained) == 0 {
+		return 0
+	}
+	return time.Since(s.progressMovedAt)
+}
+
 // updateProgress forgets every batch below the receiver's progress.
 func (s *Sender) updateProgress(progress int) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.progressSeenAt = time.Now()
+	if progress > s.progress {
+		s.progressMovedAt = s.progressSeenAt
+	}
 	for ; s.progress < progress; s.progress++ {
 		if batch, ok := s.retained[s.progress]; ok {
 			s.retainedBytes -= len(batch.data)
@@ -210,7 +227,7 @@ func (s *Sender) updateProgress(progress int) {
 }
 
 // retransmitLoop re-puts the batch the receiver is stuck on.
-// After stallRetransmits tries on the same batch it signals Stalled, since the receiver is probably gone.
+// Every stallRetransmits tries on the same batch it signals Stalled, since the receiver may be gone.
 func (s *Sender) retransmitLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -246,7 +263,7 @@ func (s *Sender) retransmitLoop(ctx context.Context) {
 			lastStuck, stuckCount = sequence, 0
 		}
 		stuckCount++
-		if stuckCount == stallRetransmits {
+		if stuckCount%stallRetransmits == 0 {
 			select {
 			case s.Stalled <- struct{}{}:
 			default:
