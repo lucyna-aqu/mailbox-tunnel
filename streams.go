@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -76,11 +73,11 @@ type Endpoint struct {
 }
 
 // newEndpoint uses the key prefixes <base>:<outgoing> and <base>:<incoming>.
-func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte)) *Endpoint {
+func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte), sendCipher, receiveCipher streamCipher) *Endpoint {
 	parser := &frameParser{onFrame: onFrame}
 	return &Endpoint{
-		sender:   NewSender(mailbox, base+":"+outgoing),
-		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed},
+		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher),
+		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher},
 		inboxes:  map[uint32]*inbox{},
 	}
 }
@@ -96,7 +93,7 @@ func (e *Endpoint) run(ctx context.Context) {
 	e.mutex.Unlock()
 }
 
-func (e *Endpoint) register(streamID uint32) *inbox {
+func (e *Endpoint) openStream(streamID uint32) *inbox {
 	box := newInbox()
 	e.mutex.Lock()
 	e.inboxes[streamID] = box
@@ -163,56 +160,27 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 	e.forget(streamID)
 }
 
-// serveNode starts a fresh endpoint for each client run announced on <session>:hello.
-func serveNode(ctx context.Context, mailbox *Mailbox, session string) {
-	var currentRunID string
-	var stopCurrent context.CancelFunc = func() {}
-	defer func() { stopCurrent() }()
-	for ctx.Err() == nil {
-		hello, err := mailbox.Take(ctx, session+":hello")
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("waiting for hello failed (%v), retrying", err)
-				time.Sleep(2 * time.Second)
-			}
-			continue
-		}
-		runID := string(hello)
-		if hello == nil || runID == currentRunID {
-			continue
-		}
-		stopCurrent()
-		currentRunID = runID
-		endpointCtx, cancel := context.WithCancel(ctx)
-		stopCurrent = cancel
-		node := NewNode(mailbox, session+"/"+runID)
-		go node.run(endpointCtx)
-		node.sender.Send(0, frameHello, nil)
-		log.Printf("node: client run %s connected", runID)
-	}
-}
-
-// Node is the exit side: it opens real TCP connections for OPEN frames.
-type Node struct {
+// NodeEndpoint is the exit side of one client run: it opens real TCP connections for OPEN frames.
+type NodeEndpoint struct {
 	*Endpoint
 }
 
-func NewNode(mailbox *Mailbox, base string) *Node {
-	node := &Node{}
-	node.Endpoint = newEndpoint(mailbox, base, "down", "up", node.onFrame)
-	return node
+func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher streamCipher) *NodeEndpoint {
+	endpoint := &NodeEndpoint{}
+	endpoint.Endpoint = newEndpoint(mailbox, runID, "down", "up", endpoint.onFrame, sendCipher, receiveCipher)
+	return endpoint
 }
 
-func (n *Node) onFrame(streamID uint32, frameType byte, payload []byte) {
+func (n *NodeEndpoint) onFrame(streamID uint32, frameType byte, payload []byte) {
 	if frameType == frameOpen {
-		box := n.register(streamID)
+		box := n.openStream(streamID)
 		go n.serve(streamID, string(payload), box)
 		return
 	}
 	n.deliver(streamID, frameType, payload)
 }
 
-func (n *Node) serve(streamID uint32, target string, box *inbox) {
+func (n *NodeEndpoint) serve(streamID uint32, target string, box *inbox) {
 	conn, err := net.DialTimeout("tcp", target, 15*time.Second)
 	if err != nil {
 		log.Printf("stream %d: connect failed (%v)", streamID, err)
@@ -221,63 +189,4 @@ func (n *Node) serve(streamID uint32, target string, box *inbox) {
 		return
 	}
 	n.pump(streamID, conn, box)
-}
-
-// Client is the local side: a SOCKS5 server whose connections become streams.
-type Client struct {
-	*Endpoint
-	mailbox      *Mailbox
-	session      string
-	runID        string
-	connected    atomic.Bool
-	streamMutex  sync.Mutex
-	nextStreamID uint32
-}
-
-func NewClient(mailbox *Mailbox, session string) *Client {
-	runIDBytes := make([]byte, 4)
-	rand.Read(runIDBytes)
-	client := &Client{mailbox: mailbox, session: session, runID: hex.EncodeToString(runIDBytes), nextStreamID: 1}
-	client.Endpoint = newEndpoint(mailbox, session+"/"+client.runID, "up", "down", client.onFrame)
-	return client
-}
-
-func (c *Client) onFrame(streamID uint32, frameType byte, payload []byte) {
-	if frameType == frameHello {
-		if !c.connected.Swap(true) {
-			log.Printf("client: node answered (run %s)", c.runID)
-		}
-		return
-	}
-	c.deliver(streamID, frameType, payload)
-}
-
-// announce sends this run's id to the node until the node answers.
-func (c *Client) announce(ctx context.Context) {
-	for ctx.Err() == nil && !c.connected.Load() {
-		if _, err := c.mailbox.Put(ctx, c.session+":hello", []byte(c.runID), ""); err != nil {
-			log.Printf("hello failed (%v), retrying", err)
-		}
-		for range 15 {
-			if ctx.Err() != nil || c.connected.Load() {
-				return
-			}
-			time.Sleep(time.Second)
-		}
-	}
-}
-
-func (c *Client) handle(conn net.Conn) {
-	target, err := socks5Handshake(conn)
-	if err != nil {
-		conn.Close()
-		return
-	}
-	c.streamMutex.Lock()
-	streamID := c.nextStreamID
-	c.nextStreamID++
-	c.streamMutex.Unlock()
-	box := c.register(streamID)
-	c.sender.Send(streamID, frameOpen, []byte(target))
-	c.pump(streamID, conn, box)
 }

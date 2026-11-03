@@ -13,7 +13,6 @@ const (
 	frameOpen  byte = 1
 	frameData  byte = 2
 	frameClose byte = 3
-	frameHello byte = 4
 
 	frameHeaderSize = 9
 	maxBatchBytes   = 70_000
@@ -67,6 +66,7 @@ type sentBatch struct {
 type Sender struct {
 	mailbox   *Mailbox
 	prefix    string
+	cipher    streamCipher
 	dropEvery int // loss testing
 
 	mutex          sync.Mutex
@@ -83,10 +83,11 @@ type Sender struct {
 // testDropEvery is set by the -test-drop-every flag.
 var testDropEvery int
 
-func NewSender(mailbox *Mailbox, prefix string) *Sender {
+func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher) *Sender {
 	return &Sender{
 		mailbox:   mailbox,
 		prefix:    prefix,
+		cipher:    cipher,
 		dropEvery: testDropEvery,
 		retained:  map[int]*sentBatch{},
 		wake:      make(chan struct{}, 1),
@@ -136,10 +137,10 @@ func (s *Sender) Run(ctx context.Context) {
 			}
 			s.mutex.Lock()
 			size := min(len(s.buffer), maxBatchBytes)
-			batch := append([]byte(nil), s.buffer[:size]...)
-			s.buffer = s.buffer[size:]
 			sequence := s.nextSequence
 			s.nextSequence++
+			batch := s.cipher.seal(sequence, s.buffer[:size])
+			s.buffer = s.buffer[size:]
 			s.retained[sequence] = &sentBatch{data: batch, putting: true}
 			s.retainedBytes += len(batch)
 			s.mutex.Unlock()
@@ -250,6 +251,7 @@ type Receiver struct {
 	mailbox *Mailbox
 	prefix  string
 	onBytes func([]byte)
+	cipher  streamCipher
 
 	mutex     sync.Mutex
 	acked     []string
@@ -305,9 +307,16 @@ func (r *Receiver) fetch(ctx context.Context, sequence int, result chan<- []byte
 			}
 			continue
 		}
-		if value != nil {
-			result <- value
-			return
+		if value == nil {
+			continue
 		}
+		plain, err := r.cipher.open(sequence, value)
+		if err != nil {
+			log.Printf("%s: %v", key, err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		result <- plain
+		return
 	}
 }
