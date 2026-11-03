@@ -93,11 +93,11 @@
         <input id="auto-connect" type="checkbox">
         Connect when the app starts
       </label>
-      <label id="env-proxy-row" class="check" hidden>
+      <label id="env-proxy-row" class="check desktop-only" hidden>
         <input id="env-proxy" type="checkbox">
         Also route command-line tools (HTTPS_PROXY)
       </label>
-      <p id="env-proxy-note" class="note small" hidden>Applies from the next connect. Terminals opened before connecting keep their old settings.</p>
+      <p id="env-proxy-note" class="note small desktop-only" hidden>Applies from the next connect. Terminals opened before connecting keep their old settings.</p>
       <div id="route-section" class="route-section" hidden>
         <div class="card-label">Route to Google</div>
         <div id="route-current" class="card-value"></div>
@@ -119,9 +119,11 @@
         <li>Get a node string (<code>mtn://…</code>) from a node you trust.</li>
         <li>Enter both in Settings, then press the power button.</li>
       </ol>
-      <p class="note">While connected, the Windows proxy points at the tunnel. It is restored when you disconnect or close the app.</p>
+      <p class="note desktop-only">While connected, the Windows proxy points at the tunnel. It is restored when you disconnect or close the app.</p>
+      <p class="note android-only">While connected, the whole phone uses the tunnel through Android's VPN.</p>
     </section>
   </main>
+  <script src="bridge.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

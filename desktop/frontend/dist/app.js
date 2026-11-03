@@ -43,9 +43,13 @@ function render(state) {
   $("env-proxy").checked = state.envProxy;
   $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
   $("node").textContent = state.node || "Not set";
-  $("proxy").textContent = state.address
-    ? state.address + (state.systemProxy ? " · Windows proxy on" : " · set your apps to use it")
-    : "Off";
+  if (state.address === "VPN") {
+    $("proxy").textContent = "Android VPN on";
+  } else {
+    $("proxy").textContent = state.address
+      ? state.address + (state.systemProxy ? " · Windows proxy on" : " · set your apps to use it")
+      : "Off";
+  }
   $("timer").textContent = state.connectedAt ? formatDuration(Date.now() - state.connectedAt) : "--:--:--";
   $("reset").hidden = !state.configured;
   showError(state.error);

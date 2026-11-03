@@ -32,6 +32,10 @@ body.connected {
   --ring: var(--on-1);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
@@ -413,6 +417,64 @@ input:focus {
 
 .text-button:hover {
   color: var(--danger);
+}
+
+/* Platforms */
+
+.android-only {
+  display: none;
+}
+
+[data-platform="android"] .android-only {
+  display: block;
+}
+
+[data-platform="android"] .desktop-only {
+  display: none !important;
+}
+
+/* Phones: the sidebar becomes a bottom bar */
+
+@media (max-width: 600px) {
+  body {
+    display: flex;
+    flex-direction: column-reverse;
+  }
+
+  .sidebar {
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 6px 0 10px;
+  }
+
+  .nav svg {
+    width: 40px;
+    height: 40px;
+    padding: 9px;
+  }
+
+  main {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .hero {
+    height: 220px;
+  }
+
+  .power {
+    width: 118px;
+    height: 118px;
+  }
+
+  .cards {
+    padding: 16px 16px 0;
+    gap: 10px;
+  }
+
+  .page {
+    padding: 20px 16px;
+  }
 }
 
 /* Logs and help */

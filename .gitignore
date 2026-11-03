@@ -5,3 +5,9 @@
 desktop/build/
 mailbox-tunnel.json
 mailbox-tunnel.log
+android/.gradle/
+android/build/
+android/app/build/
+android/app/libs/
+android/app/src/main/assets/web/
+android/local.properties

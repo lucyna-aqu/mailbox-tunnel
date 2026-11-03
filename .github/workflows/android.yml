@@ -17,6 +17,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
       - name: Install gomobile
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
@@ -26,9 +29,26 @@ jobs:
         working-directory: mobile
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          gomobile bind -target=android/arm64,android/arm -androidapi 24 -trimpath -ldflags="-s -w" -javapkg app.mailboxtunnel -o core.aar .
-          ls -la core.aar
+          mkdir -p ../android/app/libs
+          gomobile bind -target=android/arm64,android/arm -androidapi 24 -trimpath -ldflags="-s -w" -javapkg app.mailboxtunnel -o ../android/app/libs/core.aar .
+      - name: Copy the shared interface
+        run: |
+          mkdir -p android/app/src/main/assets/web
+          cp -r desktop/frontend/dist/. android/app/src/main/assets/web/
+      - name: Use the shared signing key
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE" ]; then
+            mkdir -p ~/.android
+            echo "$DEBUG_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          fi
+      - name: Build the APK
+        working-directory: android
+        run: |
+          gradle assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../mailbox-tunnel.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: core-aar
-          path: mobile/core.aar
+          name: mailbox-tunnel-apk
+          path: mailbox-tunnel.apk
