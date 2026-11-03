@@ -2,3 +2,5 @@
 *.exe
 /mailbox-tunnel
 *.exe~
+desktop/build/
+mailbox-tunnel.json

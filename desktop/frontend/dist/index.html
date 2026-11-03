@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mailbox-tunnel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <section class="status">
+      <div id="dot" class="dot"></div>
+      <div id="status-text" class="status-text">قطع</div>
+      <div id="address" class="address" dir="ltr"></div>
+    </section>
+
+    <button id="toggle" class="toggle" type="button">اتصال</button>
+    <p id="error" class="error" hidden></p>
+
+    <details id="settings-panel" class="panel">
+      <summary>تنظیمات</summary>
+      <form id="settings">
+        <label>شناسهٔ دیپلوی
+          <input id="deployment" dir="ltr" autocomplete="off" spellcheck="false" required>
+        </label>
+        <label>کلید (AUTH_KEY)
+          <input id="key" dir="ltr" autocomplete="off" spellcheck="false" required>
+        </label>
+        <label>کد node
+          <input id="node" dir="ltr" placeholder="mtn://…" autocomplete="off" spellcheck="false" required>
+        </label>
+        <button id="save" type="submit">ذخیره</button>
+        <p id="settings-message" class="message" hidden></p>
+      </form>
+      <button id="reset" class="link" type="button" hidden>پاک کردن تنظیمات</button>
+    </details>
+
+    <details class="panel">
+      <summary>گزارش</summary>
+      <pre id="log" dir="ltr"></pre>
+    </details>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

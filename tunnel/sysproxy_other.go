@@ -1,15 +1,15 @@
 //go:build !windows
 
-package main
+package tunnel
 
 import "errors"
 
 var errNoSystemProxy = errors.New("setting the system proxy is only supported on Windows")
 
-func readSystemProxy() (ProxySettings, error) {
+func ReadSystemProxy() (ProxySettings, error) {
 	return ProxySettings{}, errNoSystemProxy
 }
 
-func writeSystemProxy(ProxySettings) error {
+func WriteSystemProxy(ProxySettings) error {
 	return errNoSystemProxy
 }

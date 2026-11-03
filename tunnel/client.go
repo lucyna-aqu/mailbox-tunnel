@@ -1,4 +1,4 @@
-package main
+package tunnel
 
 import (
 	"bufio"
@@ -61,9 +61,9 @@ func (c *Client) onFrame(streamID uint32, frameType byte, payload []byte) {
 	c.deliver(streamID, frameType, payload)
 }
 
-// keepRegistered registers with the node and refreshes the registration.
+// keepRegistered registers with the node and refreshes the registration, reporting Connected once accepted.
 // It returns when the node has lost this run (for example after a restart), so the caller can start a new one.
-func (c *Client) keepRegistered(ctx context.Context) {
+func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) {
 	accepted := false
 	for ctx.Err() == nil {
 		known, err := c.register(ctx)
@@ -77,6 +77,7 @@ func (c *Client) keepRegistered(ctx context.Context) {
 		if !accepted {
 			accepted = true
 			log.Printf("client: node accepted run %s", c.runID)
+			onStatus(StatusConnected)
 		} else if !known {
 			log.Printf("client: node lost run %s, reconnecting", c.runID)
 			return

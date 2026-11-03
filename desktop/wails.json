@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "mailbox-tunnel",
+  "outputfilename": "mailbox-tunnel-desktop",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dir": "frontend",
+  "author": {
+    "name": "mailbox-tunnel"
+  },
+  "info": {
+    "companyName": "mailbox-tunnel",
+    "productName": "mailbox-tunnel",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": ""
+  }
+}

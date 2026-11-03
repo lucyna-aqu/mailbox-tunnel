@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package tunnel
 
 import (
 	"golang.org/x/sys/windows"
@@ -11,7 +11,7 @@ const internetSettingsKey = `Software\Microsoft\Windows\CurrentVersion\Internet 
 
 var internetSetOption = windows.NewLazySystemDLL("wininet.dll").NewProc("InternetSetOptionW")
 
-func readSystemProxy() (ProxySettings, error) {
+func ReadSystemProxy() (ProxySettings, error) {
 	key, err := registry.OpenKey(registry.CURRENT_USER, internetSettingsKey, registry.QUERY_VALUE)
 	if err != nil {
 		return ProxySettings{}, err
@@ -26,7 +26,7 @@ func readSystemProxy() (ProxySettings, error) {
 	return settings, nil
 }
 
-func writeSystemProxy(settings ProxySettings) error {
+func WriteSystemProxy(settings ProxySettings) error {
 	key, err := registry.OpenKey(registry.CURRENT_USER, internetSettingsKey, registry.SET_VALUE)
 	if err != nil {
 		return err

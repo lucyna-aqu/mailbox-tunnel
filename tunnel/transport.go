@@ -1,4 +1,4 @@
-package main
+package tunnel
 
 import (
 	"context"
@@ -82,15 +82,15 @@ type Sender struct {
 	Stalled        chan struct{}
 }
 
-// testDropEvery is set by the -test-drop-every flag.
-var testDropEvery int
+// TestDropEvery is set by the -test-drop-every flag.
+var TestDropEvery int
 
 func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher) *Sender {
 	return &Sender{
 		mailbox:   mailbox,
 		prefix:    prefix,
 		cipher:    cipher,
-		dropEvery: testDropEvery,
+		dropEvery: TestDropEvery,
 		retained:  map[int]*sentBatch{},
 		wake:      make(chan struct{}, 1),
 		slots:     make(chan struct{}, sendParallelism),
