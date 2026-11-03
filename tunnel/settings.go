@@ -119,8 +119,19 @@ func EnsureRoute(ctx context.Context, path string, settings *Settings, progress 
 	return true
 }
 
-// SettingsPath is the settings file next to the running executable.
+// dataDir overrides where settings and logs live; empty means next to the executable.
+var dataDir string
+
+// SetDataDir keeps settings and logs in dir, for platforms such as Android where the executable's folder is read-only.
+func SetDataDir(dir string) {
+	dataDir = dir
+}
+
+// SettingsPath is the settings file in the data directory, by default next to the running executable.
 func SettingsPath() (string, error) {
+	if dataDir != "" {
+		return filepath.Join(dataDir, SettingsFileName), nil
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return "", err

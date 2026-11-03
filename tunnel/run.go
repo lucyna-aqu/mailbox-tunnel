@@ -28,6 +28,7 @@ type ClientOptions struct {
 	Node     NodeInfo
 	Listener net.Listener
 	OnStatus func(Status) // optional
+	FakeDNS  *FakeDNS     // optional; enables DNS over SOCKS5 UDP ASSOCIATE, used by the Android VPN
 }
 
 // RunClient serves proxy connections until ctx ends, starting a new client run whenever the node loses the current one.
@@ -50,6 +51,7 @@ func RunClient(ctx context.Context, options ClientOptions) {
 				log.Printf("client: %v", err)
 				return
 			}
+			client.fakeDNS = options.FakeDNS
 			clientCtx, cancel := context.WithCancel(ctx)
 			current.Store(client)
 			go client.run(clientCtx)

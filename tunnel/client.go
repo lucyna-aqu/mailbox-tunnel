@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -21,6 +23,7 @@ type Client struct {
 	registry     *Mailbox
 	node         NodeInfo
 	own          MailboxConfig
+	fakeDNS      *FakeDNS
 	runID        string
 	publicKey    [32]byte
 	streamMutex  sync.Mutex
@@ -126,8 +129,9 @@ func (c *Client) handle(conn net.Conn) {
 	buffered := &bufferedConn{Conn: conn, reader: reader}
 	var target string
 	var initial []byte
+	command := socksConnect
 	if first[0] == 5 {
-		target, err = socks5Handshake(buffered)
+		target, command, err = socks5Handshake(buffered)
 	} else {
 		target, initial, err = httpProxyHandshake(buffered, reader)
 	}
@@ -135,6 +139,11 @@ func (c *Client) handle(conn net.Conn) {
 		conn.Close()
 		return
 	}
+	if command == socksUDPAssociate {
+		c.serveDNSAssociation(buffered)
+		return
+	}
+	target = c.realTarget(target)
 	c.streamMutex.Lock()
 	streamID := c.nextStreamID
 	c.nextStreamID++
@@ -145,6 +154,66 @@ func (c *Client) handle(conn net.Conn) {
 		c.sender.Send(streamID, frameData, initial)
 	}
 	c.pump(streamID, buffered, box)
+}
+
+// realTarget turns a fake DNS address back into the name it stands for, so the node resolves it.
+func (c *Client) realTarget(target string) string {
+	if c.fakeDNS == nil {
+		return target
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return target
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return target
+	}
+	if name, ok := c.fakeDNS.Lookup(address); ok {
+		return net.JoinHostPort(name, port)
+	}
+	return target
+}
+
+// serveDNSAssociation answers a SOCKS5 UDP ASSOCIATE for DNS only: queries to port 53 get fake DNS answers,
+// other datagrams are dropped so applications fall back to TCP. It lasts as long as the control connection.
+func (c *Client) serveDNSAssociation(control net.Conn) {
+	defer control.Close()
+	if c.fakeDNS == nil {
+		control.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		control.Write([]byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer relay.Close()
+	port := relay.LocalAddr().(*net.UDPAddr).Port
+	if _, err := control.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, byte(port >> 8), byte(port)}); err != nil {
+		return
+	}
+	go func() {
+		io.Copy(io.Discard, control)
+		relay.Close()
+	}()
+
+	packet := make([]byte, 64*1024)
+	for {
+		n, sender, err := relay.ReadFromUDP(packet)
+		if err != nil {
+			return
+		}
+		header, destinationPort, query, ok := splitSocksDatagram(packet[:n])
+		if !ok || destinationPort != 53 {
+			continue
+		}
+		answer, err := c.fakeDNS.Answer(query)
+		if err != nil {
+			continue
+		}
+		relay.WriteToUDP(append(append([]byte(nil), header...), answer...), sender)
+	}
 }
 
 func randomInt(limit int) int {
