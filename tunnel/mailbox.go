@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -24,6 +25,7 @@ const (
 	waitTimeout      = 20 * time.Second
 	callTimeout      = waitTimeout + 30*time.Second
 	connectTimeout   = 10 * time.Second
+	compressAbove    = 1024
 	maxResponseBytes = 64 << 20
 )
 
@@ -242,6 +244,17 @@ func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (i
 	if m.config.GoogleIP != "" {
 		requestURL.Host = m.config.FrontDomain
 	}
+	// Google unpacks gzip request bodies before the script runs.
+	// Base64 shrinks by about a quarter, which wins back most of its overhead on slow uplinks.
+	compressed := len(body) > compressAbove
+	if compressed {
+		var packed bytes.Buffer
+		// Base64 of encrypted data has no repeats to find, and the other levels then store it uncompressed.
+		writer, _ := gzip.NewWriterLevel(&packed, gzip.HuffmanOnly)
+		writer.Write(body)
+		writer.Close()
+		body = packed.Bytes()
+	}
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -253,6 +266,9 @@ func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (i
 	request.Host = target.Host
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	if compressed {
+		request.Header.Set("Content-Encoding", "gzip")
 	}
 	response, err := m.client.Do(request)
 	if err != nil {
