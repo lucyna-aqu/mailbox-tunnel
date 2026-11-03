@@ -39,6 +39,8 @@ function render(state) {
   $("route-section").hidden = !state.configured;
   $("auto-connect-row").hidden = !state.configured;
   $("auto-connect").checked = state.autoConnect;
+  $("env-proxy-row").hidden = $("env-proxy-note").hidden = !state.configured;
+  $("env-proxy").checked = state.envProxy;
   $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
   $("node").textContent = state.node || "Not set";
   $("proxy").textContent = state.address
@@ -117,6 +119,7 @@ $("settings").addEventListener("submit", async (event) => {
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
 $("auto-connect").addEventListener("change", (event) => backend().SetAutoConnect(event.target.checked));
+$("env-proxy").addEventListener("change", (event) => backend().SetEnvProxy(event.target.checked));
 
 $("scan").addEventListener("click", async () => {
   const message = $("scan-message");

@@ -298,6 +298,15 @@ body.scanning .glow {
   cursor: pointer;
 }
 
+.check + .check {
+  margin-top: 12px;
+}
+
+.note.small {
+  margin: 6px 0 0 28px;
+  font-size: 12px;
+}
+
 .check input {
   width: 18px;
   height: 18px;

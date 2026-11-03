@@ -79,14 +79,7 @@ func interactiveSession() error {
 	}
 	address := listener.Addr().String()
 
-	if previous, err := tunnel.ReadSystemProxy(); err == nil {
-		settings.PreviousProxy = &previous
-		if err := tunnel.SaveSettings(path, settings); err != nil {
-			return err
-		}
-		if err := tunnel.WriteSystemProxy(tunnel.TunnelProxySettings(address)); err != nil {
-			return fmt.Errorf("setting the system proxy: %w", err)
-		}
+	if tunnel.PointSystemAt(path, &settings, address) {
 		defer func() {
 			tunnel.RestoreLeftoverProxy(path, &settings)
 			fmt.Println("System proxy restored.")

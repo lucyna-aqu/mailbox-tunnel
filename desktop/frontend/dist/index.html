@@ -93,6 +93,11 @@
         <input id="auto-connect" type="checkbox">
         Connect when the app starts
       </label>
+      <label id="env-proxy-row" class="check" hidden>
+        <input id="env-proxy" type="checkbox">
+        Also route command-line tools (HTTPS_PROXY)
+      </label>
+      <p id="env-proxy-note" class="note small" hidden>Applies from the next connect. Terminals opened before connecting keep their old settings.</p>
       <div id="route-section" class="route-section" hidden>
         <div class="card-label">Route to Google</div>
         <div id="route-current" class="card-value"></div>

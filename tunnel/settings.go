@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
@@ -43,13 +44,46 @@ func TunnelProxySettings(address string) ProxySettings {
 
 // Settings are the user's saved answers, plus the system proxy to restore if a run ends without cleaning up.
 type Settings struct {
-	DeploymentID  string         `json:"deployment_id"`
-	AuthKey       string         `json:"auth_key"`
-	Node          string         `json:"node"`
-	GoogleIP      string         `json:"google_ip,omitempty"`
-	FrontDomain   string         `json:"front_domain,omitempty"`
-	AutoConnect   bool           `json:"auto_connect,omitempty"`
-	PreviousProxy *ProxySettings `json:"previous_proxy,omitempty"`
+	DeploymentID  string             `json:"deployment_id"`
+	AuthKey       string             `json:"auth_key"`
+	Node          string             `json:"node"`
+	GoogleIP      string             `json:"google_ip,omitempty"`
+	FrontDomain   string             `json:"front_domain,omitempty"`
+	AutoConnect   bool               `json:"auto_connect,omitempty"`
+	SetEnvProxy   bool               `json:"set_env_proxy,omitempty"`
+	PreviousProxy *ProxySettings     `json:"previous_proxy,omitempty"`
+	PreviousEnv   map[string]*string `json:"previous_env,omitempty"`
+}
+
+// proxyEnvironmentNames are the variables command-line tools such as Claude Code, git and npm read for a proxy.
+var proxyEnvironmentNames = []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"}
+
+// PointSystemAt points the Windows proxy, and the proxy environment variables when SetEnvProxy is on, at address.
+// The previous values are saved first so RestoreLeftoverProxy can put them back even after a crash.
+// It returns whether the Windows proxy was set.
+func PointSystemAt(path string, settings *Settings, address string) bool {
+	previous, err := ReadSystemProxy()
+	if err != nil {
+		return false
+	}
+	settings.PreviousProxy = &previous
+	if settings.SetEnvProxy {
+		if environment, err := ReadProxyEnvironment(); err == nil {
+			settings.PreviousEnv = environment
+		}
+	}
+	if err := SaveSettings(path, *settings); err != nil {
+		settings.PreviousProxy, settings.PreviousEnv = nil, nil
+		return false
+	}
+	if settings.PreviousEnv != nil {
+		proxyURL := "http://" + address
+		noProxy := "localhost,127.0.0.1"
+		if err := WriteProxyEnvironment(map[string]*string{"HTTPS_PROXY": &proxyURL, "HTTP_PROXY": &proxyURL, "NO_PROXY": &noProxy}); err != nil {
+			log.Printf("setting proxy environment variables: %v", err)
+		}
+	}
+	return WriteSystemProxy(TunnelProxySettings(address)) == nil
 }
 
 // Route is the saved route to Google, or the default one.
@@ -100,6 +134,8 @@ func LoadSettings(path string) (Settings, error) {
 	if err != nil {
 		return settings, err
 	}
+	// Editors such as older Notepad save UTF-8 with a byte order mark, which JSON does not allow.
+	content = bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
 	return settings, json.Unmarshal(content, &settings)
 }
 
@@ -113,10 +149,15 @@ func SaveSettings(path string, settings Settings) error {
 
 // RestoreLeftoverProxy puts back a system proxy that a previous run left switched on.
 func RestoreLeftoverProxy(path string, settings *Settings) {
-	if settings.PreviousProxy == nil {
+	if settings.PreviousProxy == nil && settings.PreviousEnv == nil {
 		return
 	}
-	WriteSystemProxy(*settings.PreviousProxy)
-	settings.PreviousProxy = nil
+	if settings.PreviousProxy != nil {
+		WriteSystemProxy(*settings.PreviousProxy)
+	}
+	if settings.PreviousEnv != nil {
+		WriteProxyEnvironment(settings.PreviousEnv)
+	}
+	settings.PreviousProxy, settings.PreviousEnv = nil, nil
 	SaveSettings(path, *settings)
 }

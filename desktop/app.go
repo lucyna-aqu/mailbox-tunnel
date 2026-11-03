@@ -32,6 +32,7 @@ type State struct {
 	SystemProxy bool   `json:"systemProxy"`
 	Route       string `json:"route"`
 	AutoConnect bool   `json:"autoConnect"`
+	EnvProxy    bool   `json:"envProxy"`
 	Error       string `json:"error"`
 }
 
@@ -88,6 +89,7 @@ func (a *App) startup(ctx context.Context) {
 	a.state.Configured = settings.DeploymentID != ""
 	a.state.Node = nodeLabel(settings.Node)
 	a.state.AutoConnect = settings.AutoConnect
+	a.state.EnvProxy = settings.SetEnvProxy
 	if a.state.Configured {
 		route := settings.Route()
 		a.state.Route = route.FrontDomain + " via " + route.GoogleIP
@@ -111,6 +113,23 @@ func (a *App) SetAutoConnect(enabled bool) {
 	}
 	a.mutex.Lock()
 	a.state.AutoConnect = enabled
+	a.mutex.Unlock()
+	a.publish()
+}
+
+// SetEnvProxy saves whether connecting also sets HTTPS_PROXY and friends for command-line tools. It applies from the next connect.
+func (a *App) SetEnvProxy(enabled bool) {
+	settings, err := tunnel.LoadSettings(a.settingsPath)
+	if err != nil {
+		return
+	}
+	settings.SetEnvProxy = enabled
+	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+		a.setError(err.Error())
+		return
+	}
+	a.mutex.Lock()
+	a.state.EnvProxy = enabled
 	a.mutex.Unlock()
 	a.publish()
 }
@@ -238,13 +257,7 @@ func (a *App) Connect() string {
 			}
 		}
 		address := listener.Addr().String()
-		systemProxy := false
-		if previous, err := tunnel.ReadSystemProxy(); err == nil {
-			settings.PreviousProxy = &previous
-			if err := tunnel.SaveSettings(a.settingsPath, settings); err == nil {
-				systemProxy = tunnel.WriteSystemProxy(tunnel.TunnelProxySettings(address)) == nil
-			}
-		}
+		systemProxy := tunnel.PointSystemAt(a.settingsPath, &settings, address)
 		a.mutex.Lock()
 		a.state.Address, a.state.SystemProxy = address, systemProxy
 		a.mutex.Unlock()
