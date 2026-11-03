@@ -56,7 +56,7 @@ func NewClient(own MailboxConfig, node NodeInfo) (*Client, error) {
 		publicKey:    publicKey,
 		nextStreamID: 1,
 	}
-	client.Endpoint = newEndpoint(client.mailbox, runID, "up", "down", client.onFrame, up, down)
+	client.Endpoint = newEndpoint(client.mailbox, runID, "up", "down", client.onFrame, up, down, smallBatchBytes)
 	return client, nil
 }
 

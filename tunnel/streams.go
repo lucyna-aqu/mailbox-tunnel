@@ -82,10 +82,10 @@ type Endpoint struct {
 }
 
 // newEndpoint uses the key prefixes <base>:<outgoing> and <base>:<incoming>.
-func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte), sendCipher, receiveCipher streamCipher) *Endpoint {
+func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte), sendCipher, receiveCipher streamCipher, maxBatch int) *Endpoint {
 	parser := &frameParser{onFrame: onFrame}
 	return &Endpoint{
-		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher),
+		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, maxBatch),
 		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher},
 		inboxes:  map[uint32]*inbox{},
 	}
@@ -139,7 +139,7 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 		for {
 			n, err := conn.Read(buffer)
 			if n > 0 {
-				for e.sender.Backlog() > maxBacklogBytes {
+				for e.sender.Backlog() > e.sender.MaxBacklog() {
 					time.Sleep(50 * time.Millisecond)
 				}
 				e.sender.Send(streamID, frameData, buffer[:n])
@@ -176,9 +176,10 @@ type NodeEndpoint struct {
 	*Endpoint
 }
 
-func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher streamCipher) *NodeEndpoint {
+// maxBatch is the largest batch the client's mailbox can store.
+func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher streamCipher, maxBatch int) *NodeEndpoint {
 	endpoint := &NodeEndpoint{}
-	endpoint.Endpoint = newEndpoint(mailbox, runID, "down", "up", endpoint.onFrame, sendCipher, receiveCipher)
+	endpoint.Endpoint = newEndpoint(mailbox, runID, "down", "up", endpoint.onFrame, sendCipher, receiveCipher, maxBatch)
 	return endpoint
 }
 

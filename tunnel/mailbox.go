@@ -144,6 +144,18 @@ func (m *Mailbox) Ping(ctx context.Context) error {
 	return err
 }
 
+// Version returns the mailbox script's version; scripts from before versioning report 1.
+func (m *Mailbox) Version(ctx context.Context) (int, error) {
+	reply, err := m.call(ctx, map[string]any{"op": "ping"})
+	if err != nil {
+		return 0, err
+	}
+	if version, ok := reply["version"].(float64); ok {
+		return int(version), nil
+	}
+	return 1, nil
+}
+
 func (m *Mailbox) call(ctx context.Context, request map[string]any) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()

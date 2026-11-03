@@ -15,8 +15,12 @@ const (
 	frameClose byte = 3
 
 	frameHeaderSize = 9
-	maxBatchBytes   = 70_000
 	maxBacklogBytes = 3_000_000
+
+	// Each mailbox call costs about a second on Google's side however much it carries, so bulk downloads go in large batches.
+	// Uploads stay small, since Iran's slow uplinks would make a large batch hold up everything behind it.
+	smallBatchBytes = 70_000
+	largeBatchBytes = 500_000
 	flushInterval   = 150 * time.Millisecond
 	sendParallelism = 6
 	receiveWindow   = 6
@@ -68,6 +72,7 @@ type Sender struct {
 	mailbox   *Mailbox
 	prefix    string
 	cipher    streamCipher
+	maxBatch  int
 	dropEvery int // loss testing
 
 	mutex           sync.Mutex
@@ -86,11 +91,12 @@ type Sender struct {
 // TestDropEvery is set by the -test-drop-every flag.
 var TestDropEvery int
 
-func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher) *Sender {
+func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch int) *Sender {
 	return &Sender{
 		mailbox:   mailbox,
 		prefix:    prefix,
 		cipher:    cipher,
+		maxBatch:  maxBatch,
 		dropEvery: TestDropEvery,
 		retained:  map[int]*sentBatch{},
 		wake:      make(chan struct{}, 1),
@@ -120,6 +126,11 @@ func (s *Sender) Backlog() int {
 	return len(s.buffer) + s.retainedBytes
 }
 
+// MaxBacklog is the backlog above which writers wait, enough to keep every put slot busy with a full batch.
+func (s *Sender) MaxBacklog() int {
+	return max(maxBacklogBytes, sendParallelism*s.maxBatch+1_000_000)
+}
+
 func (s *Sender) pending() int {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -140,7 +151,7 @@ func (s *Sender) Run(ctx context.Context) {
 				return
 			}
 			s.mutex.Lock()
-			size := min(len(s.buffer), maxBatchBytes)
+			size := min(len(s.buffer), s.maxBatch)
 			sequence := s.nextSequence
 			s.nextSequence++
 			batch := s.cipher.seal(sequence, s.buffer[:size])
