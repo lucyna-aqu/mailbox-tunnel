@@ -271,6 +271,40 @@ body.scanning .glow {
   font-variant-numeric: tabular-nums;
 }
 
+.traffic {
+  display: flex;
+  gap: 18px;
+  align-items: baseline;
+}
+
+.total {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.route-label {
+  margin-top: 10px;
+}
+
+.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.check input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
 .down {
   color: var(--on-1);
 }

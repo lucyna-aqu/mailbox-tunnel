@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -146,6 +147,7 @@ func (m *Mailbox) Ping(ctx context.Context) error {
 func (m *Mailbox) call(ctx context.Context, request map[string]any) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
+	started := time.Now()
 
 	request["k"] = m.config.AuthKey
 	body, err := json.Marshal(request)
@@ -173,7 +175,33 @@ func (m *Mailbox) call(ctx context.Context, request map[string]any) (map[string]
 	if message, failed := reply["error"]; failed {
 		return nil, fmt.Errorf("mailbox: %v", message)
 	}
+	if op := request["op"]; op != "wait" && op != "take" {
+		recordLatency(time.Since(started))
+	}
 	return reply, nil
+}
+
+var latency struct {
+	sync.Mutex
+	average time.Duration
+}
+
+// recordLatency keeps a moving average of mailbox round trips, leaving out long polls.
+func recordLatency(sample time.Duration) {
+	latency.Lock()
+	defer latency.Unlock()
+	if latency.average == 0 {
+		latency.average = sample
+		return
+	}
+	latency.average = (latency.average*4 + sample) / 5
+}
+
+// Latency is the moving average time of a mailbox round trip, or 0 before the first one.
+func Latency() time.Duration {
+	latency.Lock()
+	defer latency.Unlock()
+	return latency.average
 }
 
 func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (int, string, []byte, error) {

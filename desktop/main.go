@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log"
 
+	"github.com/lucyna-aqu/mailbox-tunnel/tunnel"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -14,9 +15,16 @@ import (
 var assets embed.FS
 
 func main() {
+	// One client at a time: a second launch brings the open window forward instead of competing for the mailbox.
+	if !tunnel.AcquireSingleInstance() {
+		if !focusRunningWindow() {
+			showMessage("mailbox-tunnel is already running in a console window. Close it first.")
+		}
+		return
+	}
 	app := NewApp()
 	err := wails.Run(&options.App{
-		Title:            "mailbox-tunnel",
+		Title:            windowTitle,
 		Width:            540,
 		Height:           720,
 		MinWidth:         480,

@@ -31,13 +31,15 @@ type State struct {
 	Address     string `json:"address"`
 	SystemProxy bool   `json:"systemProxy"`
 	Route       string `json:"route"`
+	AutoConnect bool   `json:"autoConnect"`
 	Error       string `json:"error"`
 }
 
-// Traffic is the total relayed for local applications.
+// Traffic is the total relayed for local applications, plus the current round trip to Google.
 type Traffic struct {
-	Sent     int64 `json:"sent"`
-	Received int64 `json:"received"`
+	Sent      int64 `json:"sent"`
+	Received  int64 `json:"received"`
+	LatencyMs int64 `json:"latencyMs"`
 }
 
 // nodeLabel is a short, stable name for a node: the start of its public key.
@@ -85,11 +87,32 @@ func (a *App) startup(ctx context.Context) {
 	a.mutex.Lock()
 	a.state.Configured = settings.DeploymentID != ""
 	a.state.Node = nodeLabel(settings.Node)
+	a.state.AutoConnect = settings.AutoConnect
 	if a.state.Configured {
 		route := settings.Route()
 		a.state.Route = route.FrontDomain + " via " + route.GoogleIP
 	}
 	a.mutex.Unlock()
+	if a.state.Configured && settings.AutoConnect {
+		a.Connect()
+	}
+}
+
+// SetAutoConnect saves whether the app connects as soon as it starts.
+func (a *App) SetAutoConnect(enabled bool) {
+	settings, err := tunnel.LoadSettings(a.settingsPath)
+	if err != nil {
+		return
+	}
+	settings.AutoConnect = enabled
+	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+		a.setError(err.Error())
+		return
+	}
+	a.mutex.Lock()
+	a.state.AutoConnect = enabled
+	a.mutex.Unlock()
+	a.publish()
 }
 
 // beforeClose disconnects, which also restores the system proxy, before the window closes.
@@ -127,22 +150,22 @@ func (a *App) State() State {
 
 func (a *App) Traffic() Traffic {
 	sent, received := tunnel.TrafficTotals()
-	return Traffic{Sent: sent, Received: received}
+	return Traffic{Sent: sent, Received: received, LatencyMs: tunnel.Latency().Milliseconds()}
 }
 
 func (a *App) Logs() []string {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	return append([]string(nil), a.logs...)
+	return append([]string{}, a.logs...)
 }
 
 // SaveSettings checks the mailbox and the node string, then saves them. It returns an error message or "".
 func (a *App) SaveSettings(deploymentID, authKey, node string) string {
-	settings := tunnel.Settings{
-		DeploymentID: strings.TrimSpace(deploymentID),
-		AuthKey:      strings.TrimSpace(authKey),
-		Node:         strings.TrimSpace(node),
-	}
+	// Keep the saved route and options; only the three answers change.
+	settings, _ := tunnel.LoadSettings(a.settingsPath)
+	settings.DeploymentID = strings.TrimSpace(deploymentID)
+	settings.AuthKey = strings.TrimSpace(authKey)
+	settings.Node = strings.TrimSpace(node)
 	if _, err := tunnel.ParseNodeInfo(settings.Node); err != nil {
 		return "That is not a valid node string."
 	}

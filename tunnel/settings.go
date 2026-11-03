@@ -48,6 +48,7 @@ type Settings struct {
 	Node          string         `json:"node"`
 	GoogleIP      string         `json:"google_ip,omitempty"`
 	FrontDomain   string         `json:"front_domain,omitempty"`
+	AutoConnect   bool           `json:"auto_connect,omitempty"`
 	PreviousProxy *ProxySettings `json:"previous_proxy,omitempty"`
 }
 

@@ -28,6 +28,9 @@ func runInteractive() {
 }
 
 func interactiveSession() error {
+	if !tunnel.AcquireSingleInstance() {
+		return errors.New("mailbox-tunnel is already running. Close the other window first")
+	}
 	if file, err := tunnel.OpenLogFile(); err == nil {
 		log.SetOutput(io.MultiWriter(os.Stderr, file))
 	}

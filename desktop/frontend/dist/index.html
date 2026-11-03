@@ -54,16 +54,21 @@
           <div id="timer" class="card-value big">--:--:--</div>
         </div>
         <div class="card">
+          <div class="card-label">Ping to Google</div>
+          <div id="ping" class="card-value big">-- ms</div>
+        </div>
+        <div class="card wide">
           <div class="card-label">Traffic</div>
-          <div class="card-value"><span class="down">↓</span> <span id="rate-down">0 B/s</span></div>
-          <div class="card-value"><span class="up">↑</span> <span id="rate-up">0 B/s</span></div>
+          <div class="card-value traffic">
+            <span><span class="down">↓</span> <span id="rate-down">0 B/s</span></span>
+            <span><span class="up">↑</span> <span id="rate-up">0 B/s</span></span>
+            <span class="total" id="total"></span>
+          </div>
         </div>
         <div class="card wide">
           <div class="card-label">Proxy</div>
           <div id="proxy" class="card-value">Off</div>
-        </div>
-        <div class="card wide">
-          <div class="card-label">Route to Google</div>
+          <div class="card-label route-label">Route to Google</div>
           <div id="route" class="card-value">Default</div>
         </div>
       </div>
@@ -84,6 +89,10 @@
         <button id="save" class="primary" type="submit">Save</button>
         <p id="settings-message" class="message" hidden></p>
       </form>
+      <label id="auto-connect-row" class="check" hidden>
+        <input id="auto-connect" type="checkbox">
+        Connect when the app starts
+      </label>
       <div id="route-section" class="route-section" hidden>
         <div class="card-label">Route to Google</div>
         <div id="route-current" class="card-value"></div>

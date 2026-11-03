@@ -37,6 +37,8 @@ function render(state) {
   $("status-text").textContent = (statusText[state.status] || state.status) + connectedFor + scanning;
   $("route").textContent = $("route-current").textContent = state.route || "Default";
   $("route-section").hidden = !state.configured;
+  $("auto-connect-row").hidden = !state.configured;
+  $("auto-connect").checked = state.autoConnect;
   $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
   $("node").textContent = state.node || "Not set";
   $("proxy").textContent = state.address
@@ -62,14 +64,23 @@ async function tick() {
   render(current);
   const traffic = await backend().Traffic();
   const now = Date.now();
-  if (lastTraffic && current.status !== "disconnected") {
+  const live = current.status !== "disconnected";
+  if (lastTraffic && live) {
     const seconds = (now - lastTraffic.time) / 1000;
     $("rate-down").textContent = formatRate((traffic.received - lastTraffic.received) / seconds);
     $("rate-up").textContent = formatRate((traffic.sent - lastTraffic.sent) / seconds);
   } else {
     $("rate-down").textContent = $("rate-up").textContent = "0 B/s";
   }
+  $("total").textContent = traffic.received + traffic.sent > 0 ? formatSize(traffic.received + traffic.sent) + " total" : "";
+  $("ping").textContent = live && traffic.latencyMs > 0 ? traffic.latencyMs + " ms" : "-- ms";
   lastTraffic = { ...traffic, time: now };
+}
+
+function formatSize(bytes) {
+  if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  return Math.round(bytes / 1024) + " KB";
 }
 
 document.querySelectorAll(".nav").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.page)));
@@ -105,6 +116,7 @@ $("settings").addEventListener("submit", async (event) => {
 });
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
+$("auto-connect").addEventListener("change", (event) => backend().SetAutoConnect(event.target.checked));
 
 $("scan").addEventListener("click", async () => {
   const message = $("scan-message");
@@ -128,8 +140,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   window.runtime.EventsOn("state", render);
   window.runtime.EventsOn("log", appendLog);
   window.runtime.EventsOn("scan", onScanProgress);
+  setInterval(tick, 1000);
   render(await backend().State());
   if (!current.configured) showPage("settings");
-  (await backend().Logs()).forEach(appendLog);
-  setInterval(tick, 1000);
+  ((await backend().Logs()) || []).forEach(appendLog);
 });
