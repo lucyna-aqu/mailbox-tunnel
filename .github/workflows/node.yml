@@ -19,7 +19,8 @@ concurrency:
 jobs:
   node:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(inputs.minutes) + 10 }}
+    # The node stops itself after its -duration; this only catches a hung run.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
