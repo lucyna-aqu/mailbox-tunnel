@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,7 +14,7 @@ import (
 	"time"
 )
 
-// Client is the local side: a SOCKS5 server whose connections become streams through the user's own mailbox.
+// Client is the local side: a SOCKS5 and HTTP proxy whose connections become streams through the user's own mailbox.
 type Client struct {
 	*Endpoint
 	mailbox      *Mailbox
@@ -113,8 +114,22 @@ func (c *Client) register(ctx context.Context) (bool, error) {
 	return string(ack) == "known", nil
 }
 
+// handle serves one local connection, speaking SOCKS5 or HTTP proxy depending on its first byte.
 func (c *Client) handle(conn net.Conn) {
-	target, err := socks5Handshake(conn)
+	reader := bufio.NewReader(conn)
+	first, err := reader.Peek(1)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	buffered := &bufferedConn{Conn: conn, reader: reader}
+	var target string
+	var initial []byte
+	if first[0] == 5 {
+		target, err = socks5Handshake(buffered)
+	} else {
+		target, initial, err = httpProxyHandshake(buffered, reader)
+	}
 	if err != nil {
 		conn.Close()
 		return
@@ -125,7 +140,10 @@ func (c *Client) handle(conn net.Conn) {
 	c.streamMutex.Unlock()
 	box := c.openStream(streamID)
 	c.sender.Send(streamID, frameOpen, []byte(target))
-	c.pump(streamID, conn, box)
+	if len(initial) > 0 {
+		c.sender.Send(streamID, frameData, initial)
+	}
+	c.pump(streamID, buffered, box)
 }
 
 func randomInt(limit int) int {

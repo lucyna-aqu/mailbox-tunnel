@@ -19,12 +19,16 @@ import (
 const defaultGoogleIP = "216.239.38.120"
 
 func main() {
+	if len(os.Args) == 1 {
+		runInteractive()
+		return
+	}
 	mode := flag.String("mode", "", "client, node or keygen")
 	deploymentID := flag.String("deployment", os.Getenv("MAILBOX_DEPLOYMENT_ID"), "your Apps Script deployment ID (or MAILBOX_DEPLOYMENT_ID)")
 	authKey := flag.String("key", os.Getenv("MAILBOX_AUTH_KEY"), "AUTH_KEY from your Code.gs (or MAILBOX_AUTH_KEY)")
 	nodeString := flag.String("node", os.Getenv("MAILBOX_NODE"), "client: the node to use, mtn://... (or MAILBOX_NODE)")
 	nodeKey := flag.String("node-key", os.Getenv("MAILBOX_NODE_KEY"), "node: private key from -mode keygen (or MAILBOX_NODE_KEY)")
-	listen := flag.String("listen", "127.0.0.1:1080", "client: SOCKS5 listen address")
+	listen := flag.String("listen", "127.0.0.1:1080", "client: SOCKS5 and HTTP proxy listen address")
 	statusListen := flag.String("status-listen", os.Getenv("STATUS_LISTEN"), "node: serve a plain-text status page on this address, e.g. :7860 (or STATUS_LISTEN)")
 	googleIP := flag.String("google-ip", "", "Google IP to dial instead of script.google.com (default "+defaultGoogleIP+" for the client, direct for the node)")
 	frontDomain := flag.String("front-domain", "www.google.com", "TLS SNI shown to the network when fronting")
@@ -65,9 +69,17 @@ func main() {
 
 	if *mode == "node" {
 		runNode(ctx, config, *nodeKey, *statusListen)
-	} else {
-		runClient(ctx, config, *nodeString, *listen)
+		return
 	}
+	node, err := ParseNodeInfo(*nodeString)
+	if err != nil {
+		log.Fatalf("-node: %v", err)
+	}
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatal(err)
+	}
+	runClient(ctx, config, node, listener)
 }
 
 func runNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen string) {
@@ -95,15 +107,8 @@ func runNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen 
 	server.Run(ctx)
 }
 
-func runClient(ctx context.Context, own MailboxConfig, nodeString, listenAddress string) {
-	node, err := ParseNodeInfo(nodeString)
-	if err != nil {
-		log.Fatalf("-node: %v", err)
-	}
-	listener, err := net.Listen("tcp", listenAddress)
-	if err != nil {
-		log.Fatal(err)
-	}
+// runClient serves proxy connections on listener until ctx ends, starting a new client run whenever the node loses the current one.
+func runClient(ctx context.Context, own MailboxConfig, node NodeInfo, listener net.Listener) {
 	go func() {
 		<-ctx.Done()
 		listener.Close()
@@ -124,7 +129,7 @@ func runClient(ctx context.Context, own MailboxConfig, nodeString, listenAddress
 		}
 	}()
 
-	log.Printf("client: SOCKS5 on %s", listenAddress)
+	log.Printf("client: proxy on %s", listener.Addr())
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
