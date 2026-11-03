@@ -151,7 +151,12 @@ func (s *Sender) Run(ctx context.Context) {
 				return
 			}
 			s.mutex.Lock()
-			size := min(len(s.buffer), s.maxBatch)
+			// The first batch after a quiet spell stays small so the reply starts quickly; bulk follows in large batches.
+			limit := s.maxBatch
+			if len(s.retained) == 0 {
+				limit = min(limit, smallBatchBytes)
+			}
+			size := min(len(s.buffer), limit)
 			sequence := s.nextSequence
 			s.nextSequence++
 			batch := s.cipher.seal(sequence, s.buffer[:size])
