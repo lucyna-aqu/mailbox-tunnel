@@ -98,6 +98,9 @@ type Sender struct {
 // TestDropEvery is set by the -test-drop-every flag.
 var TestDropEvery int
 
+// Trace is set by the -trace flag.
+var Trace bool
+
 func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch, parallelism int) *Sender {
 	return &Sender{
 		mailbox:   mailbox,
@@ -200,7 +203,11 @@ func (s *Sender) deliver(ctx context.Context, sequence int, batch []byte) {
 	defer s.finishPut(sequence)
 	key := fmt.Sprintf("%s:%d", s.prefix, sequence)
 	for attempt := range 3 {
+		started := time.Now()
 		progress, err := s.mailbox.Put(ctx, key, batch, s.progressKey())
+		if Trace {
+			log.Printf("trace put %s %dB %dms in-flight %d", key, len(batch), time.Since(started).Milliseconds(), len(s.slots))
+		}
 		if err == nil {
 			s.updateProgress(progress)
 			return
@@ -355,7 +362,11 @@ func (r *Receiver) fetch(ctx context.Context, sequence int, result chan<- []byte
 	key := r.key(sequence)
 	for ctx.Err() == nil {
 		acked, delivered := r.takeAcks()
+		started := time.Now()
 		value, err := r.mailbox.Wait(ctx, key, acked, r.prefix+":progress", delivered)
+		if Trace && value != nil {
+			log.Printf("trace got %s %dB after %dms", key, len(value), time.Since(started).Milliseconds())
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("wait %s failed (%v), retrying", key, err)

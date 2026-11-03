@@ -33,7 +33,11 @@ func main() {
 	frontDomain := flag.String("front-domain", tunnel.DefaultFrontDomain, "TLS SNI shown to the network when fronting")
 	duration := flag.Duration("duration", 0, "stop after this long (0 = until interrupted)")
 	flag.IntVar(&tunnel.TestDropEvery, "test-drop-every", 0, "testing only: skip the first put of every Nth batch")
+	flag.BoolVar(&tunnel.Trace, "trace", false, "testing only: log the timing of every put, wait and backlog stall")
 	flag.Parse()
+	if tunnel.Trace {
+		log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	}
 
 	if *mode == "keygen" {
 		privateKey, publicKey, err := tunnel.GenerateNodeKey()

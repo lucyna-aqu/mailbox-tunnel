@@ -7,6 +7,10 @@ on:
         description: How long to keep the node running
         required: true
         default: "25"
+      trace:
+        description: Log the timing of every put and wait (testing only)
+        type: boolean
+        default: false
 
 concurrency:
   group: node
@@ -15,7 +19,7 @@ concurrency:
 jobs:
   node:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: ${{ fromJSON(inputs.minutes) + 10 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -28,4 +32,4 @@ jobs:
           MAILBOX_DEPLOYMENT_ID: ${{ secrets.MAILBOX_DEPLOYMENT_ID }}
           MAILBOX_AUTH_KEY: ${{ secrets.MAILBOX_AUTH_KEY }}
           MAILBOX_NODE_KEY: ${{ secrets.MAILBOX_NODE_KEY }}
-        run: ./mailbox-tunnel -mode node -duration "${{ inputs.minutes }}m"
+        run: ./mailbox-tunnel -mode node -duration "${{ inputs.minutes }}m" -trace=${{ inputs.trace }}

@@ -146,8 +146,12 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 		for {
 			n, err := conn.Read(buffer)
 			if n > 0 {
+				stalledAt := time.Now()
 				for e.sender.Backlog() > e.sender.MaxBacklog() {
 					time.Sleep(50 * time.Millisecond)
+				}
+				if Trace && time.Since(stalledAt) > 50*time.Millisecond {
+					log.Printf("trace backlog full for %dms", time.Since(stalledAt).Milliseconds())
 				}
 				e.sender.Send(streamID, frameData, buffer[:n])
 				bytesFromApps.Add(int64(n))
