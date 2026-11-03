@@ -8,6 +8,10 @@ on:
         required: true
         default: "25"
 
+concurrency:
+  group: node
+  cancel-in-progress: true
+
 jobs:
   node:
     runs-on: ubuntu-latest
