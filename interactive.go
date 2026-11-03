@@ -58,6 +58,16 @@ func interactiveSession() error {
 		return fmt.Errorf("node in %s: %w", tunnel.SettingsFileName, err)
 	}
 
+	fmt.Println("Checking the route to Google...")
+	found := tunnel.EnsureRoute(ctx, path, &settings, func(done, total int) {
+		fmt.Printf("\rSearching for a working route: %d/%d ", done, total)
+	})
+	if !found {
+		return errors.New("no working route to Google was found on this network")
+	}
+	route := settings.Route()
+	fmt.Printf("\nRoute: %s via %s\n", route.FrontDomain, route.GoogleIP)
+
 	listener, err := net.Listen("tcp", "127.0.0.1:1080")
 	if err != nil {
 		if listener, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {

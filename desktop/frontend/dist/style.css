@@ -19,7 +19,8 @@
   --ring: #5f7482;
 }
 
-body.connecting {
+body.connecting,
+body.scanning {
   --state-1: var(--busy-1);
   --state-2: var(--busy-2);
   --ring: var(--busy-1);
@@ -161,7 +162,8 @@ h1 {
   transition: background 0.5s;
 }
 
-body.connecting .glow {
+body.connecting .glow,
+body.scanning .glow {
   animation: breathe 1.6s ease-in-out infinite;
 }
 
@@ -325,6 +327,33 @@ input:focus {
 .message {
   margin: 0;
   color: var(--muted);
+}
+
+.route-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.secondary {
+  margin-top: 6px;
+  padding: 11px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  font-weight: 600;
+}
+
+.secondary:hover {
+  background: var(--card-hover);
+}
+
+.secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .message.bad {

@@ -22,7 +22,7 @@ func main() {
 		runInteractive()
 		return
 	}
-	mode := flag.String("mode", "", "client, node or keygen")
+	mode := flag.String("mode", "", "client, node, scan or keygen")
 	deploymentID := flag.String("deployment", os.Getenv("MAILBOX_DEPLOYMENT_ID"), "your Apps Script deployment ID (or MAILBOX_DEPLOYMENT_ID)")
 	authKey := flag.String("key", os.Getenv("MAILBOX_AUTH_KEY"), "AUTH_KEY from your Code.gs (or MAILBOX_AUTH_KEY)")
 	nodeString := flag.String("node", os.Getenv("MAILBOX_NODE"), "client: the node to use, mtn://... (or MAILBOX_NODE)")
@@ -43,7 +43,7 @@ func main() {
 		fmt.Printf("node key (keep secret): %s\npublic key:             %s\n", privateKey, publicKey)
 		return
 	}
-	if (*mode != "client" && *mode != "node") || *deploymentID == "" || *authKey == "" {
+	if (*mode != "client" && *mode != "node" && *mode != "scan") || *deploymentID == "" || *authKey == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -60,6 +60,19 @@ func main() {
 	}
 
 	config := tunnel.MailboxConfig{DeploymentID: *deploymentID, AuthKey: *authKey, GoogleIP: *googleIP, FrontDomain: *frontDomain}
+	if *mode == "scan" {
+		routes := tunnel.ScanRoutes(ctx, config, func(done, total int) {
+			fmt.Printf("\rtesting %d/%d", done, total)
+		})
+		fmt.Println()
+		if len(routes) == 0 {
+			log.Fatal("no working route to Google found on this network")
+		}
+		for _, route := range routes {
+			fmt.Printf("%-16s %-22s %s\n", route.GoogleIP, route.FrontDomain, route.Latency.Round(time.Millisecond))
+		}
+		return
+	}
 	started := time.Now()
 	if err := tunnel.NewMailbox(config).Ping(ctx); err != nil {
 		log.Fatalf("mailbox unreachable: %v", err)

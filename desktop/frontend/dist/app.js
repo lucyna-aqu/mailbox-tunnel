@@ -1,8 +1,10 @@
 const statusText = {
   disconnected: "Not connected",
+  scanning: "Finding a route…",
   connecting: "Connecting…",
   connected: "Protected",
 };
+let scanProgress = "";
 
 const $ = (id) => document.getElementById(id);
 const backend = () => window.go.main.App;
@@ -31,7 +33,10 @@ function render(state) {
   current = state;
   document.body.className = state.status;
   const connectedFor = state.connectedAt ? " • " + formatDuration(Date.now() - state.connectedAt) : "";
-  $("status-text").textContent = (statusText[state.status] || state.status) + connectedFor;
+  const scanning = state.status === "scanning" && scanProgress ? " " + scanProgress : "";
+  $("status-text").textContent = (statusText[state.status] || state.status) + connectedFor + scanning;
+  $("route").textContent = $("route-current").textContent = state.route || "Default";
+  $("route-section").hidden = !state.configured;
   $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
   $("node").textContent = state.node || "Not set";
   $("proxy").textContent = state.address
@@ -101,9 +106,28 @@ $("settings").addEventListener("submit", async (event) => {
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
 
+$("scan").addEventListener("click", async () => {
+  const message = $("scan-message");
+  message.hidden = false;
+  message.className = "message";
+  message.textContent = "Testing routes on this network…";
+  $("scan").disabled = true;
+  const result = await backend().FindRoute();
+  $("scan").disabled = false;
+  message.textContent = result;
+  scanProgress = "";
+});
+
+function onScanProgress(progress) {
+  scanProgress = progress.done + "/" + progress.total;
+  if (!$("scan").disabled) return;
+  $("scan-message").textContent = "Testing routes on this network… " + scanProgress;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   window.runtime.EventsOn("state", render);
   window.runtime.EventsOn("log", appendLog);
+  window.runtime.EventsOn("scan", onScanProgress);
   render(await backend().State());
   if (!current.configured) showPage("settings");
   (await backend().Logs()).forEach(appendLog);

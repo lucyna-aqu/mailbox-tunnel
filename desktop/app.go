@@ -18,6 +18,7 @@ import (
 
 const (
 	statusDisconnected = "disconnected"
+	statusScanning     = "scanning"
 	logLimit           = 300
 )
 
@@ -29,6 +30,7 @@ type State struct {
 	ConnectedAt int64  `json:"connectedAt"` // Unix milliseconds, 0 when not connected
 	Address     string `json:"address"`
 	SystemProxy bool   `json:"systemProxy"`
+	Route       string `json:"route"`
 	Error       string `json:"error"`
 }
 
@@ -83,6 +85,10 @@ func (a *App) startup(ctx context.Context) {
 	a.mutex.Lock()
 	a.state.Configured = settings.DeploymentID != ""
 	a.state.Node = nodeLabel(settings.Node)
+	if a.state.Configured {
+		route := settings.Route()
+		a.state.Route = route.FrontDomain + " via " + route.GoogleIP
+	}
 	a.mutex.Unlock()
 }
 
@@ -173,33 +179,53 @@ func (a *App) Connect() string {
 	if err != nil {
 		return "That is not a valid node string."
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:1080")
-	if err != nil {
-		if listener, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
-			return err.Error()
-		}
-	}
-	address := listener.Addr().String()
-
-	systemProxy := false
-	if previous, err := tunnel.ReadSystemProxy(); err == nil {
-		settings.PreviousProxy = &previous
-		if err := tunnel.SaveSettings(a.settingsPath, settings); err == nil {
-			systemProxy = tunnel.WriteSystemProxy(tunnel.TunnelProxySettings(address)) == nil
-		}
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	a.mutex.Lock()
 	a.cancel, a.stopped = cancel, stopped
-	a.state.Address, a.state.SystemProxy, a.state.Error = address, systemProxy, ""
-	a.state.Status = string(tunnel.StatusConnecting)
+	a.state.Error = ""
+	a.state.Status = statusScanning
 	a.mutex.Unlock()
 	a.publish()
 
 	go func() {
 		defer close(stopped)
+		defer func() {
+			a.mutex.Lock()
+			a.cancel, a.stopped = nil, nil
+			a.state.Status, a.state.Address, a.state.SystemProxy, a.state.ConnectedAt = statusDisconnected, "", false, 0
+			a.mutex.Unlock()
+			a.publish()
+		}()
+
+		if !tunnel.EnsureRoute(ctx, a.settingsPath, &settings, a.scanProgress) {
+			if ctx.Err() == nil {
+				a.setError("No working route to Google was found on this network.")
+			}
+			return
+		}
+		a.setRoute(settings.Route())
+
+		listener, err := net.Listen("tcp", "127.0.0.1:1080")
+		if err != nil {
+			if listener, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
+				a.setError(err.Error())
+				return
+			}
+		}
+		address := listener.Addr().String()
+		systemProxy := false
+		if previous, err := tunnel.ReadSystemProxy(); err == nil {
+			settings.PreviousProxy = &previous
+			if err := tunnel.SaveSettings(a.settingsPath, settings); err == nil {
+				systemProxy = tunnel.WriteSystemProxy(tunnel.TunnelProxySettings(address)) == nil
+			}
+		}
+		a.mutex.Lock()
+		a.state.Address, a.state.SystemProxy = address, systemProxy
+		a.mutex.Unlock()
+
 		tunnel.RunClient(ctx, tunnel.ClientOptions{
 			Own:      settings.OwnMailbox(),
 			Node:     node,
@@ -209,13 +235,40 @@ func (a *App) Connect() string {
 		if saved, err := tunnel.LoadSettings(a.settingsPath); err == nil {
 			tunnel.RestoreLeftoverProxy(a.settingsPath, &saved)
 		}
-		a.mutex.Lock()
-		a.cancel, a.stopped = nil, nil
-		a.state.Status, a.state.Address, a.state.SystemProxy, a.state.ConnectedAt = statusDisconnected, "", false, 0
-		a.mutex.Unlock()
-		a.publish()
 	}()
 	return ""
+}
+
+// FindRoute scans this network for the fastest working route to Google and saves it. It returns a message for the user.
+func (a *App) FindRoute() string {
+	settings, err := tunnel.LoadSettings(a.settingsPath)
+	if err != nil {
+		return "Enter your settings first."
+	}
+	routes := tunnel.ScanRoutes(context.Background(), settings.OwnMailbox(), a.scanProgress)
+	if len(routes) == 0 {
+		return "No working route to Google was found on this network."
+	}
+	best := routes[0]
+	settings.GoogleIP, settings.FrontDomain = best.GoogleIP, best.FrontDomain
+	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+		return err.Error()
+	}
+	a.setRoute(best)
+	return fmt.Sprintf("Using %s via %s (%d ms). Reconnect to use it.", best.FrontDomain, best.GoogleIP, best.Latency.Milliseconds())
+}
+
+func (a *App) scanProgress(done, total int) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "scan", map[string]int{"done": done, "total": total})
+	}
+}
+
+func (a *App) setRoute(route tunnel.Route) {
+	a.mutex.Lock()
+	a.state.Route = route.FrontDomain + " via " + route.GoogleIP
+	a.mutex.Unlock()
+	a.publish()
 }
 
 // Disconnect stops the tunnel and waits until the system proxy is restored.

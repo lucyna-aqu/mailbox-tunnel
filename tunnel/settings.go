@@ -1,9 +1,12 @@
 package tunnel
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -43,12 +46,42 @@ type Settings struct {
 	DeploymentID  string         `json:"deployment_id"`
 	AuthKey       string         `json:"auth_key"`
 	Node          string         `json:"node"`
+	GoogleIP      string         `json:"google_ip,omitempty"`
+	FrontDomain   string         `json:"front_domain,omitempty"`
 	PreviousProxy *ProxySettings `json:"previous_proxy,omitempty"`
 }
 
-// OwnMailbox is the user's mailbox configuration, fronted through Google.
+// Route is the saved route to Google, or the default one.
+func (s Settings) Route() Route {
+	if s.GoogleIP == "" || s.FrontDomain == "" {
+		return Route{GoogleIP: DefaultGoogleIP, FrontDomain: DefaultFrontDomain}
+	}
+	return Route{GoogleIP: s.GoogleIP, FrontDomain: s.FrontDomain}
+}
+
+// OwnMailbox is the user's mailbox configuration, fronted through the saved route.
 func (s Settings) OwnMailbox() MailboxConfig {
-	return MailboxConfig{DeploymentID: s.DeploymentID, AuthKey: s.AuthKey, GoogleIP: DefaultGoogleIP, FrontDomain: DefaultFrontDomain}
+	route := s.Route()
+	return MailboxConfig{DeploymentID: s.DeploymentID, AuthKey: s.AuthKey, GoogleIP: route.GoogleIP, FrontDomain: route.FrontDomain}
+}
+
+// EnsureRoute checks the saved route and, when it no longer works on this network, scans for a new one and saves it.
+// It returns false when no working route was found.
+func EnsureRoute(ctx context.Context, path string, settings *Settings, progress func(done, total int)) bool {
+	if _, ok := TestRoute(ctx, settings.OwnMailbox(), settings.Route()); ok {
+		return true
+	}
+	log.Printf("route %s via %s does not work here, scanning", settings.Route().FrontDomain, settings.Route().GoogleIP)
+	routes := ScanRoutes(ctx, settings.OwnMailbox(), progress)
+	if len(routes) == 0 {
+		log.Printf("scan: no working route found")
+		return false
+	}
+	best := routes[0]
+	log.Printf("scan: using %s via %s (%s)", best.FrontDomain, best.GoogleIP, best.Latency.Round(time.Millisecond))
+	settings.GoogleIP, settings.FrontDomain = best.GoogleIP, best.FrontDomain
+	SaveSettings(path, *settings)
+	return true
 }
 
 // SettingsPath is the settings file next to the running executable.

@@ -62,6 +62,10 @@
           <div class="card-label">Proxy</div>
           <div id="proxy" class="card-value">Off</div>
         </div>
+        <div class="card wide">
+          <div class="card-label">Route to Google</div>
+          <div id="route" class="card-value">Default</div>
+        </div>
       </div>
     </section>
 
@@ -80,6 +84,12 @@
         <button id="save" class="primary" type="submit">Save</button>
         <p id="settings-message" class="message" hidden></p>
       </form>
+      <div id="route-section" class="route-section" hidden>
+        <div class="card-label">Route to Google</div>
+        <div id="route-current" class="card-value"></div>
+        <button id="scan" class="secondary" type="button">Find best route</button>
+        <p id="scan-message" class="message" hidden></p>
+      </div>
       <button id="reset" class="text-button" type="button" hidden>Reset settings</button>
     </section>
 
