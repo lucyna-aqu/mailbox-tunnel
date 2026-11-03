@@ -81,12 +81,19 @@ type Endpoint struct {
 	inboxes  map[uint32]*inbox
 }
 
+// endpointShape sets the largest outgoing batch and how many calls run in parallel each way.
+type endpointShape struct {
+	maxBatch        int
+	sendParallelism int
+	receiveWindow   int
+}
+
 // newEndpoint uses the key prefixes <base>:<outgoing> and <base>:<incoming>.
-func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte), sendCipher, receiveCipher streamCipher, maxBatch int) *Endpoint {
+func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte), sendCipher, receiveCipher streamCipher, shape endpointShape) *Endpoint {
 	parser := &frameParser{onFrame: onFrame}
 	return &Endpoint{
-		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, maxBatch),
-		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher},
+		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, shape.maxBatch, shape.sendParallelism),
+		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher, window: shape.receiveWindow},
 		inboxes:  map[uint32]*inbox{},
 	}
 }
@@ -179,7 +186,8 @@ type NodeEndpoint struct {
 // maxBatch is the largest batch the client's mailbox can store.
 func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher streamCipher, maxBatch int) *NodeEndpoint {
 	endpoint := &NodeEndpoint{}
-	endpoint.Endpoint = newEndpoint(mailbox, runID, "down", "up", endpoint.onFrame, sendCipher, receiveCipher, maxBatch)
+	shape := endpointShape{maxBatch: maxBatch, sendParallelism: downloadParallelism, receiveWindow: uploadParallelism}
+	endpoint.Endpoint = newEndpoint(mailbox, runID, "down", "up", endpoint.onFrame, sendCipher, receiveCipher, shape)
 	return endpoint
 }
 

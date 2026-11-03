@@ -22,8 +22,12 @@ const (
 	smallBatchBytes = 70_000
 	largeBatchBytes = 500_000
 	flushInterval   = 150 * time.Millisecond
-	sendParallelism = 6
-	receiveWindow   = 6
+
+	// Google runs at most 30 executions at once per account, and both tunnel ends run in the user's account.
+	// Downloads get 9 parallel calls and uploads 3, which measured about 20% faster than 6 and 6.
+	// Uploads lose nothing, since 3 calls already carry more than Iran's uplinks.
+	downloadParallelism = 9
+	uploadParallelism   = 3
 
 	retransmitAfter  = 6 * time.Second
 	statusInterval   = 3 * time.Second
@@ -91,7 +95,7 @@ type Sender struct {
 // TestDropEvery is set by the -test-drop-every flag.
 var TestDropEvery int
 
-func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch int) *Sender {
+func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch, parallelism int) *Sender {
 	return &Sender{
 		mailbox:   mailbox,
 		prefix:    prefix,
@@ -100,7 +104,7 @@ func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch in
 		dropEvery: TestDropEvery,
 		retained:  map[int]*sentBatch{},
 		wake:      make(chan struct{}, 1),
-		slots:     make(chan struct{}, sendParallelism),
+		slots:     make(chan struct{}, parallelism),
 		Stalled:   make(chan struct{}, 1),
 	}
 }
@@ -128,7 +132,7 @@ func (s *Sender) Backlog() int {
 
 // MaxBacklog is the backlog above which writers wait, enough to keep every put slot busy with a full batch.
 func (s *Sender) MaxBacklog() int {
-	return max(maxBacklogBytes, sendParallelism*s.maxBatch+1_000_000)
+	return max(maxBacklogBytes, cap(s.slots)*s.maxBatch+1_000_000)
 }
 
 func (s *Sender) pending() int {
@@ -300,6 +304,7 @@ type Receiver struct {
 	prefix  string
 	onBytes func([]byte)
 	cipher  streamCipher
+	window  int
 
 	mutex     sync.Mutex
 	acked     []string
@@ -314,7 +319,7 @@ func (r *Receiver) Run(ctx context.Context) {
 	pending := map[int]chan []byte{}
 	nextToDeliver, nextToRequest := 0, 0
 	for {
-		for nextToRequest < nextToDeliver+receiveWindow {
+		for nextToRequest < nextToDeliver+r.window {
 			result := make(chan []byte, 1)
 			pending[nextToRequest] = result
 			go r.fetch(ctx, nextToRequest, result)

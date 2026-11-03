@@ -56,7 +56,8 @@ func NewClient(own MailboxConfig, node NodeInfo) (*Client, error) {
 		publicKey:    publicKey,
 		nextStreamID: 1,
 	}
-	client.Endpoint = newEndpoint(client.mailbox, runID, "up", "down", client.onFrame, up, down, smallBatchBytes)
+	client.Endpoint = newEndpoint(client.mailbox, runID, "up", "down", client.onFrame, up, down,
+		endpointShape{maxBatch: smallBatchBytes, sendParallelism: uploadParallelism, receiveWindow: downloadParallelism})
 	return client, nil
 }
 
