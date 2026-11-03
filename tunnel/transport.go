@@ -21,7 +21,11 @@ const (
 	// Uploads stay small, since Iran's slow uplinks would make a large batch hold up everything behind it.
 	smallBatchBytes = 70_000
 	largeBatchBytes = 500_000
-	flushInterval   = 150 * time.Millisecond
+
+	// While puts are in flight there is no hurry, so frames gather for a while into fewer, larger batches.
+	// On an idle line they go out almost at once, since every hop already costs about a second.
+	flushInterval     = 150 * time.Millisecond
+	idleFlushInterval = 5 * time.Millisecond
 
 	// Google runs at most 30 executions at once per account, and both tunnel ends run in the user's account.
 	// Downloads get 9 parallel calls and uploads 3, which measured about 20% faster than 6 and 6.
@@ -149,7 +153,11 @@ func (s *Sender) Run(ctx context.Context) {
 			return
 		case <-s.wake:
 		}
-		time.Sleep(flushInterval)
+		if len(s.slots) == 0 {
+			time.Sleep(idleFlushInterval)
+		} else {
+			time.Sleep(flushInterval)
+		}
 		for s.pending() > 0 {
 			if !s.acquireSlot(ctx) {
 				return
