@@ -113,6 +113,12 @@ func (s *NodeServer) accept(ctx context.Context, entry registration) {
 	}
 }
 
+func (s *NodeServer) SessionCount() int {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return len(s.sessions)
+}
+
 func (s *NodeServer) reapIdleSessions() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

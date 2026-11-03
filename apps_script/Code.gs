@@ -7,6 +7,15 @@ const MAX_WAIT_MS = 300000;
 const POLL_INTERVAL_MS = 100;
 const MESSAGE_TTL_SECONDS = 600;
 
+// Node operators only: the node's status URL, visited hourly by keepAlive so a free host does not put it to sleep.
+const KEEPALIVE_URL = "";
+
+function keepAlive() {
+  if (KEEPALIVE_URL) {
+    UrlFetchApp.fetch(KEEPALIVE_URL, { muteHttpExceptions: true });
+  }
+}
+
 function doPost(e) {
   try {
     const request = JSON.parse(e.postData.contents);

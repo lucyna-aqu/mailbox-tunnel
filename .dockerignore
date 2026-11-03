@@ -1,0 +1,5 @@
+.git
+.github
+*.exe
+*.exe~
+mailbox-tunnel

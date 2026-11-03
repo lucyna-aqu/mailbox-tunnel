@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -24,6 +25,7 @@ func main() {
 	nodeString := flag.String("node", os.Getenv("MAILBOX_NODE"), "client: the node to use, mtn://... (or MAILBOX_NODE)")
 	nodeKey := flag.String("node-key", os.Getenv("MAILBOX_NODE_KEY"), "node: private key from -mode keygen (or MAILBOX_NODE_KEY)")
 	listen := flag.String("listen", "127.0.0.1:1080", "client: SOCKS5 listen address")
+	statusListen := flag.String("status-listen", os.Getenv("STATUS_LISTEN"), "node: serve a plain-text status page on this address, e.g. :7860 (or STATUS_LISTEN)")
 	googleIP := flag.String("google-ip", "", "Google IP to dial instead of script.google.com (default "+defaultGoogleIP+" for the client, direct for the node)")
 	frontDomain := flag.String("front-domain", "www.google.com", "TLS SNI shown to the network when fronting")
 	duration := flag.Duration("duration", 0, "stop after this long (0 = until interrupted)")
@@ -62,13 +64,13 @@ func main() {
 	log.Printf("mailbox OK (%s)", time.Since(started).Round(time.Millisecond))
 
 	if *mode == "node" {
-		runNode(ctx, config, *nodeKey)
+		runNode(ctx, config, *nodeKey, *statusListen)
 	} else {
 		runClient(ctx, config, *nodeString, *listen)
 	}
 }
 
-func runNode(ctx context.Context, registry MailboxConfig, nodeKey string) {
+func runNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen string) {
 	privateKey, publicKey, err := parsePrivateKey(nodeKey)
 	if err != nil {
 		log.Fatalf("-node-key: %v (create one with -mode keygen)", err)
@@ -76,7 +78,21 @@ func runNode(ctx context.Context, registry MailboxConfig, nodeKey string) {
 	info := NodeInfo{DeploymentID: registry.DeploymentID, AuthKey: registry.AuthKey, PublicKey: publicKey}
 	log.Printf("node: %s", info)
 	userConfig := MailboxConfig{GoogleIP: registry.GoogleIP, FrontDomain: registry.FrontDomain}
-	NewNodeServer(NewMailbox(registry), userConfig, privateKey, publicKey).Run(ctx)
+	server := NewNodeServer(NewMailbox(registry), userConfig, privateKey, publicKey)
+
+	if statusListen != "" {
+		go func() {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				fmt.Fprintf(w, "mailbox-tunnel node\nactive sessions: %d\n\n%s\n", server.SessionCount(), info)
+			})
+			log.Printf("status page on %s", statusListen)
+			if err := http.ListenAndServe(statusListen, handler); err != nil {
+				log.Printf("status page: %v", err)
+			}
+		}()
+	}
+	server.Run(ctx)
 }
 
 func runClient(ctx context.Context, own MailboxConfig, nodeString, listenAddress string) {
