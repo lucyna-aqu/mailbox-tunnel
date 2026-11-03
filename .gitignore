@@ -1,0 +1,4 @@
+.env
+*.exe
+/mailbox-tunnel
+*.exe~
