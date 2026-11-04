@@ -6,7 +6,7 @@ const AUTH_KEY = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET";
 const MAX_WAIT_MS = 300000;
 const POLL_INTERVAL_MS = 100;
 const MESSAGE_TTL_SECONDS = 600;
-const VERSION = 2;
+const VERSION = 4;
 
 // A cache entry holds at most 100KB, so larger values are split into parts under <key>#<n>.
 // The entry at <key> then holds "~" and the number of parts; base64 values never start with "~".
@@ -119,15 +119,36 @@ function waitFor(cache, key, timeoutMs, remove) {
   while (true) {
     const value = load(cache, key);
     if (value !== null) {
-      if (remove) {
-        cache.removeAll(withParts([key]));
+      if (!remove) {
+        return value;
       }
-      return value;
+      const taken = takeUnderLock(cache, key);
+      if (taken !== null) {
+        return taken;
+      }
     }
     if (Date.now() >= deadline) {
       return null;
     }
     Utilities.sleep(POLL_INTERVAL_MS);
+  }
+}
+
+// Two pollers can read the same value before either removes it, so taking happens under a lock.
+// It returns the value, or null when another execution took it first.
+function takeUnderLock(cache, key) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    return null;
+  }
+  try {
+    const value = load(cache, key);
+    if (value !== null) {
+      cache.removeAll(withParts([key]));
+    }
+    return value;
+  } finally {
+    lock.releaseLock();
   }
 }
 
