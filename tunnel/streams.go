@@ -81,9 +81,10 @@ type Endpoint struct {
 	inboxes  map[uint32]*inbox
 }
 
-// endpointShape sets the largest outgoing batch and how many calls run in parallel each way.
+// endpointShape sets the largest outgoing batch, how much is sealed ahead, and how many calls run in parallel each way.
 type endpointShape struct {
 	maxBatch        int
+	window          int
 	sendParallelism int
 	receiveWindow   int
 }
@@ -92,7 +93,7 @@ type endpointShape struct {
 func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func(uint32, byte, []byte), sendCipher, receiveCipher streamCipher, shape endpointShape) *Endpoint {
 	parser := &frameParser{onFrame: onFrame}
 	return &Endpoint{
-		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, shape.maxBatch, shape.sendParallelism),
+		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, shape.maxBatch, shape.sendParallelism, shape.window),
 		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher, window: shape.receiveWindow},
 		inboxes:  map[uint32]*inbox{},
 	}
@@ -128,6 +129,11 @@ func (e *Endpoint) deliver(streamID uint32, frameType byte, payload []byte) {
 	e.mutex.Lock()
 	box := e.inboxes[streamID]
 	e.mutex.Unlock()
+	// The other end forgets a stream once it closes, so whatever this end still has waiting for it would only be thrown away there.
+	// Dropping it is what makes jumping in a video fast: the old download no longer drains through the line first.
+	if frameType == frameClose {
+		e.sender.Drop(streamID, box != nil)
+	}
 	if box == nil {
 		return
 	}
@@ -187,10 +193,10 @@ type NodeEndpoint struct {
 	*Endpoint
 }
 
-// maxBatch is the largest batch the client's mailbox can store.
-func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher streamCipher, maxBatch int) *NodeEndpoint {
+// maxBatch is the largest batch the client's mailbox can store; window is how much is sealed ahead of the client.
+func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher streamCipher, maxBatch, window int) *NodeEndpoint {
 	endpoint := &NodeEndpoint{}
-	shape := endpointShape{maxBatch: maxBatch, sendParallelism: downloadParallelism, receiveWindow: uploadParallelism}
+	shape := endpointShape{maxBatch: maxBatch, window: window, sendParallelism: downloadParallelism, receiveWindow: uploadParallelism}
 	endpoint.Endpoint = newEndpoint(mailbox, runID, "down", "up", endpoint.onFrame, sendCipher, receiveCipher, shape)
 	return endpoint
 }

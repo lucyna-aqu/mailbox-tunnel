@@ -22,6 +22,12 @@ const (
 	smallBatchBytes = 70_000
 	largeBatchBytes = 500_000
 
+	// The window is how much is sealed ahead of the receiver: enough to keep the line busy, small enough to drain fast after a closed stream.
+	// Google's calls take seconds, so its window stays large; a relay answers at once.
+	googleWindowBytes = 4_500_000
+	relayWindowBytes  = 768_000
+	uploadWindowBytes = 512_000
+
 	// Frames that arrive together, such as a TLS server's whole first flight, go out in one batch.
 	// Under load no extra wait is needed, since frames gather on their own while every put slot is busy.
 	flushInterval = 20 * time.Millisecond
@@ -75,15 +81,21 @@ type sentBatch struct {
 }
 
 // Sender batches outgoing frames under sequence keys and keeps each batch until the receiver has taken it.
+// Frames wait in a queue per stream, and batches take one frame from each stream in turn,
+// so a short reply never waits behind a long download.
 type Sender struct {
 	mailbox   *Mailbox
 	prefix    string
 	cipher    streamCipher
 	maxBatch  int
+	window    int // most bytes sealed ahead of the receiver
 	dropEvery int // loss testing
 
 	mutex           sync.Mutex
-	buffer          []byte
+	queues          map[uint32][][]byte // encoded frames waiting, by stream
+	order           []uint32            // streams with waiting frames, in turn
+	pendingBytes    int
+	dropped         map[uint32]bool // streams whose other end has closed while this end still runs
 	nextSequence    int
 	retained        map[int]*sentBatch
 	retainedBytes   int
@@ -101,13 +113,16 @@ var TestDropEvery int
 // Trace is set by the -trace flag.
 var Trace bool
 
-func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch, parallelism int) *Sender {
+func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch, parallelism, window int) *Sender {
 	return &Sender{
 		mailbox:   mailbox,
 		prefix:    prefix,
 		cipher:    cipher,
 		maxBatch:  maxBatch,
+		window:    window,
 		dropEvery: TestDropEvery,
+		queues:    map[uint32][][]byte{},
+		dropped:   map[uint32]bool{},
 		retained:  map[int]*sentBatch{},
 		wake:      make(chan struct{}, 1),
 		slots:     make(chan struct{}, parallelism),
@@ -120,8 +135,22 @@ func (s *Sender) progressKey() string {
 }
 
 func (s *Sender) Send(streamID uint32, frameType byte, data []byte) {
+	frame := appendFrame(nil, streamID, frameType, data)
 	s.mutex.Lock()
-	s.buffer = appendFrame(s.buffer, streamID, frameType, data)
+	if s.dropped[streamID] {
+		// This end's close is the last frame of a stream, so the mark is no longer needed after it.
+		if frameType == frameClose {
+			delete(s.dropped, streamID)
+		}
+		s.mutex.Unlock()
+		return
+	}
+	queue, waiting := s.queues[streamID]
+	s.queues[streamID] = append(queue, frame)
+	if !waiting {
+		s.order = append(s.order, streamID)
+	}
+	s.pendingBytes += len(frame)
 	s.mutex.Unlock()
 	select {
 	case s.wake <- struct{}{}:
@@ -129,11 +158,55 @@ func (s *Sender) Send(streamID uint32, frameType byte, data []byte) {
 	}
 }
 
+// Drop discards the frames still waiting for a stream whose other end has closed, since that end would throw them away.
+// While this end of the stream still runs, its later frames are discarded too.
+func (s *Sender) Drop(streamID uint32, stillRunning bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if queue, ok := s.queues[streamID]; ok {
+		for _, frame := range queue {
+			s.pendingBytes -= len(frame)
+		}
+		delete(s.queues, streamID)
+		for i, id := range s.order {
+			if id == streamID {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+	if stillRunning {
+		s.dropped[streamID] = true
+	}
+}
+
+// takeFrames builds a batch of whole frames, one frame from each waiting stream in turn; the caller holds the mutex.
+func (s *Sender) takeFrames(limit int) []byte {
+	var batch []byte
+	for len(s.order) > 0 {
+		streamID := s.order[0]
+		queue := s.queues[streamID]
+		if len(batch) > 0 && len(batch)+len(queue[0]) > limit {
+			break
+		}
+		batch = append(batch, queue[0]...)
+		s.pendingBytes -= len(queue[0])
+		s.order = s.order[1:]
+		if len(queue) > 1 {
+			s.queues[streamID] = queue[1:]
+			s.order = append(s.order, streamID)
+		} else {
+			delete(s.queues, streamID)
+		}
+	}
+	return batch
+}
+
 // Backlog counts unsent bytes plus bytes the receiver has not taken yet.
 func (s *Sender) Backlog() int {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	return len(s.buffer) + s.retainedBytes
+	return s.pendingBytes + s.retainedBytes
 }
 
 // MaxBacklog is the backlog above which writers wait, enough to keep every put slot busy with a full batch.
@@ -144,7 +217,7 @@ func (s *Sender) MaxBacklog() int {
 func (s *Sender) pending() int {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	return len(s.buffer)
+	return s.pendingBytes
 }
 
 func (s *Sender) Run(ctx context.Context) {
@@ -161,16 +234,22 @@ func (s *Sender) Run(ctx context.Context) {
 				return
 			}
 			s.mutex.Lock()
+			// A sealed batch cannot be recalled, so only a window of data is sealed ahead of the receiver.
+			// The rest waits in the stream queues, where a closed stream's data can still be dropped and a new reply can go first.
+			if s.retainedBytes >= s.window {
+				s.mutex.Unlock()
+				<-s.slots
+				s.waitForRoom(ctx)
+				continue
+			}
 			// The first batch after a quiet spell stays small so the reply starts quickly; bulk follows in large batches.
 			limit := s.maxBatch
 			if len(s.retained) == 0 {
 				limit = min(limit, smallBatchBytes)
 			}
-			size := min(len(s.buffer), limit)
 			sequence := s.nextSequence
 			s.nextSequence++
-			batch := s.cipher.seal(sequence, s.buffer[:size])
-			s.buffer = s.buffer[size:]
+			batch := s.cipher.seal(sequence, s.takeFrames(limit))
 			if len(s.retained) == 0 {
 				s.progressMovedAt = time.Now()
 			}
@@ -194,6 +273,23 @@ func (s *Sender) acquireSlot(ctx context.Context) bool {
 		return false
 	case s.slots <- struct{}{}:
 		return true
+	}
+}
+
+// waitForRoom asks for the receiver's progress while the window is full, since no put replies bring it then.
+func (s *Sender) waitForRoom(ctx context.Context) {
+	progress, err := s.mailbox.Status(ctx, s.progressKey())
+	if err != nil {
+		sleepContext(ctx, time.Second)
+		return
+	}
+	s.mutex.Lock()
+	moved := progress > s.progress
+	s.mutex.Unlock()
+	s.updateProgress(progress)
+	if !moved {
+		// The receiver has taken nothing new, so ask again shortly rather than at once.
+		sleepContext(ctx, 200*time.Millisecond)
 	}
 }
 

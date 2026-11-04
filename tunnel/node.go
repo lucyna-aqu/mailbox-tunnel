@@ -153,11 +153,14 @@ func (s *NodeServer) startSession(ctx context.Context, entry registration) (*nod
 	sessionCtx, cancel := context.WithCancel(ctx)
 	session := &nodeSession{runID: entry.RunID, mailbox: NewMailbox(config), cancel: cancel, lastSeen: time.Now()}
 	// Mailboxes deployed before version 2 cannot store values over 100KB.
-	maxBatch := smallBatchBytes
+	maxBatch, window := smallBatchBytes, googleWindowBytes
 	if version, err := session.mailbox.Version(ctx); err == nil && version >= 2 {
 		maxBatch = largeBatchBytes
 	}
-	endpoint := NewNodeEndpoint(session.mailbox, entry.RunID, down, up, maxBatch)
+	if selfHosted(entry.DeploymentID) {
+		window = relayWindowBytes
+	}
+	endpoint := NewNodeEndpoint(session.mailbox, entry.RunID, down, up, maxBatch, window)
 	go endpoint.run(sessionCtx)
 	go s.watchClient(sessionCtx, entry.DeploymentID, entry.RunID, endpoint.sender)
 
