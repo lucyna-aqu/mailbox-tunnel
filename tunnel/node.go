@@ -49,7 +49,13 @@ func NewNodeServer(registry *Mailbox, userConfig MailboxConfig, privateKey, publ
 // Its clients then reach the next node on their next refresh, while their current sessions keep running here.
 func (s *NodeServer) Run(ctx context.Context, handover time.Duration) {
 	listenCtx := ctx
-	if deadline, ok := ctx.Deadline(); ok && handover > 0 {
+	deadline, ok := ctx.Deadline()
+	// A node must take registrations for longer than a client's refresh, or clients never find it.
+	if ok && handover > 0 && time.Until(deadline)-handover < registrationRefresh+time.Minute {
+		log.Printf("node: run too short for a %v handover, taking registrations until the end", handover)
+		handover = 0
+	}
+	if ok && handover > 0 {
 		var cancel context.CancelFunc
 		listenCtx, cancel = context.WithDeadline(ctx, deadline.Add(-handover))
 		defer cancel()

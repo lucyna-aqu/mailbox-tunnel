@@ -51,7 +51,12 @@ jobs:
           CHAIN: ${{ inputs.chain }}
           TRACE: ${{ inputs.trace }}
         run: |
-          if [ "$CHAIN" = true ] && [ "$MINUTES" -gt "$START_NEXT" ]; then
+          # Shorter chained runs would keep several nodes listening at once, and clients would bounce between them.
+          if [ "$CHAIN" = true ] && [ "$MINUTES" -lt 30 ]; then
+            echo "::error::A chain needs at least 30 minutes per node."
+            exit 1
+          fi
+          if [ "$CHAIN" = true ]; then
             (sleep $(( (MINUTES - START_NEXT) * 60 )) && gh workflow run node.yml --ref "$GITHUB_REF_NAME" -f minutes="$MINUTES" -f chain=true) &
           fi
           ./mailbox-tunnel -mode node -duration "${MINUTES}m" -handover "${HANDOVER}m" -trace="$TRACE"
