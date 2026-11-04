@@ -38,6 +38,11 @@ function render(state) {
   $("route").textContent = $("route-current").textContent = state.route || "Default";
   $("route-section").hidden = !state.configured;
   $("backup-section").hidden = !state.configured;
+  $("setup-code-section").hidden = !state.configured;
+  if (!state.configured) {
+    $("setup-code").hidden = true;
+    $("setup-code").value = "";
+  }
   $("backup-current").textContent = state.backup ? "Set: used while Google does not work" : "Not set";
   $("auto-connect-row").hidden = !state.configured;
   $("auto-connect").checked = state.autoConnect;
@@ -113,14 +118,28 @@ $("settings").addEventListener("submit", async (event) => {
   message.className = "message";
   message.textContent = "Checking your mailbox…";
   $("save").disabled = true;
-  const error = await backend().SaveSettings($("deployment").value, $("key").value, $("node-input").value);
+  const error = await backend().SaveSettings($("mailbox").value, $("node-input").value);
   $("save").disabled = false;
   message.className = error ? "message bad" : "message";
   message.textContent = error || "Saved.";
   if (!error) {
-    $("deployment").value = $("key").value = $("node-input").value = "";
+    $("mailbox").value = $("node-input").value = "";
+    $("node-row").hidden = false;
     showPage("home");
   }
+});
+
+// A setup code already holds the node.
+$("mailbox").addEventListener("input", (event) => {
+  $("node-row").hidden = event.target.value.trim().startsWith("mtc://");
+});
+
+$("show-setup-code").addEventListener("click", async () => {
+  const code = $("setup-code");
+  code.value = await backend().SetupCode();
+  code.hidden = false;
+  code.focus();
+  code.select();
 });
 
 $("reset").addEventListener("click", () => backend().ResetSettings());

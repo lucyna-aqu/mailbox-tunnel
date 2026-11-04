@@ -101,26 +101,21 @@ func askSettings(ctx context.Context) (tunnel.Settings, error) {
 		return strings.Trim(strings.TrimSpace(answer), `"'`)
 	}
 	for ctx.Err() == nil {
-		settings := tunnel.Settings{
-			DeploymentID: ask("\nDeployment ID of your Apps Script: "),
-			AuthKey:      ask("AUTH_KEY from your Code.gs: "),
+		mailbox := ask("\nWeb app URL of your Apps Script, or a setup code: ")
+		node := ""
+		if !strings.HasPrefix(mailbox, "mtc://") {
+			node = ask("Node string (starts with mtn://): ")
 		}
 		fmt.Println("Checking your mailbox...")
-		pingCtx, cancel := context.WithTimeout(ctx, time.Minute)
-		err := tunnel.NewMailbox(settings.OwnMailbox()).Ping(pingCtx)
+		var settings tunnel.Settings
+		setupCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		err := tunnel.Setup(setupCtx, &settings, mailbox, node)
 		cancel()
-		if err != nil {
-			fmt.Printf("That did not work (%v). Please check both values and try again.\n", err)
-			continue
+		if err == nil {
+			fmt.Println("Mailbox OK.")
+			return settings, nil
 		}
-		fmt.Println("Mailbox OK.")
-		for ctx.Err() == nil {
-			settings.Node = ask("Node string (starts with mtn://): ")
-			if _, err := tunnel.ParseNodeInfo(settings.Node); err == nil {
-				return settings, nil
-			}
-			fmt.Println("That is not a valid node string.")
-		}
+		fmt.Println(err)
 	}
 	return tunnel.Settings{}, ctx.Err()
 }

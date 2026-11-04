@@ -181,6 +181,27 @@ func (m *Mailbox) Ping(ctx context.Context) error {
 	return err
 }
 
+var (
+	// ErrClaimed means the mailbox already has another key, set by another device or written into its Code.gs.
+	ErrClaimed = errors.New("mailbox already has another key")
+	// ErrCannotClaim means the mailbox runs a Code.gs from before keys could be set by the app.
+	ErrCannotClaim = errors.New("mailbox cannot take a key from the app")
+)
+
+// Claim gives a mailbox that has no key yet the configured one.
+func (m *Mailbox) Claim(ctx context.Context) error {
+	_, err := m.call(ctx, map[string]any{"op": "claim"})
+	if err != nil {
+		switch err.Error() {
+		case "mailbox: claimed":
+			return ErrClaimed
+		case "mailbox: unauthorized":
+			return ErrCannotClaim
+		}
+	}
+	return err
+}
+
 // Version returns the mailbox script's version; scripts from before versioning report 1.
 func (m *Mailbox) Version(ctx context.Context) (int, error) {
 	reply, err := m.call(ctx, map[string]any{"op": "ping"})

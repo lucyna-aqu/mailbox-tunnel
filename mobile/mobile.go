@@ -126,20 +126,14 @@ func Logs() string {
 	return strings.Join(controller.logs, "\n")
 }
 
-// SaveSettings checks the mailbox and the node string, then saves them. It returns an error message or "".
-func SaveSettings(deploymentID, authKey, node string) string {
+// SaveSettings takes a setup code, or a mailbox address and a node string, checks them and saves them.
+// It returns an error message or "".
+func SaveSettings(mailbox, node string) string {
 	settings, _ := tunnel.LoadSettings(settingsPath())
-	settings.DeploymentID = strings.TrimSpace(deploymentID)
-	settings.AuthKey = strings.TrimSpace(authKey)
-	settings.Node = strings.TrimSpace(node)
-	if _, err := tunnel.ParseNodeInfo(settings.Node); err != nil {
-		return "That is not a valid node string."
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err := tunnel.NewMailbox(settings.OwnMailbox()).Ping(ctx); err != nil {
-		log.Printf("mailbox check: %v", err)
-		return "Your mailbox did not answer. Check the deployment ID and the auth key."
+	if err := tunnel.Setup(ctx, &settings, mailbox, node); err != nil {
+		return err.Error()
 	}
 	if err := tunnel.SaveSettings(settingsPath(), settings); err != nil {
 		return err.Error()
@@ -148,6 +142,15 @@ func SaveSettings(deploymentID, authKey, node string) string {
 	applySettings(settings)
 	controller.Unlock()
 	return ""
+}
+
+// SetupCode is the saved settings in one string, to set up another device; it is empty before setup.
+func SetupCode() string {
+	settings, err := tunnel.LoadSettings(settingsPath())
+	if err != nil || settings.DeploymentID == "" {
+		return ""
+	}
+	return settings.SetupCode()
 }
 
 // ResetSettings deletes the saved settings.

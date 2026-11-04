@@ -97,7 +97,9 @@ public class MainActivity extends Activity {
                 case "Logs":
                     return Mobile.logs();
                 case "SaveSettings":
-                    return Mobile.saveSettings(arguments.getString(0), arguments.getString(1), arguments.getString(2));
+                    return Mobile.saveSettings(arguments.getString(0), arguments.getString(1));
+                case "SetupCode":
+                    return Mobile.setupCode();
                 case "FindRoute":
                     return Mobile.findRoute();
                 case "ResetSettings":

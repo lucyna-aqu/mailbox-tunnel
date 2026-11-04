@@ -33,7 +33,8 @@
       const text = await call("Logs");
       return text ? text.split("\n") : [];
     },
-    SaveSettings: (deploymentID, authKey, node) => call("SaveSettings", deploymentID, authKey, node),
+    SaveSettings: (mailbox, node) => call("SaveSettings", mailbox, node),
+    SetupCode: () => call("SetupCode"),
     FindRoute: () => call("FindRoute"),
     ResetSettings: () => call("ResetSettings"),
     SetAutoConnect: (enabled) => call("SetAutoConnect", enabled),

@@ -180,21 +180,15 @@ func (a *App) Logs() []string {
 	return append([]string{}, a.logs...)
 }
 
-// SaveSettings checks the mailbox and the node string, then saves them. It returns an error message or "".
-func (a *App) SaveSettings(deploymentID, authKey, node string) string {
-	// Keep the saved route and options; only the three answers change.
+// SaveSettings takes a setup code, or a mailbox address and a node string, checks them and saves them.
+// It returns an error message or "".
+func (a *App) SaveSettings(mailbox, node string) string {
+	// Keep the saved route and options; only the answers change.
 	settings, _ := tunnel.LoadSettings(a.settingsPath)
-	settings.DeploymentID = strings.TrimSpace(deploymentID)
-	settings.AuthKey = strings.TrimSpace(authKey)
-	settings.Node = strings.TrimSpace(node)
-	if _, err := tunnel.ParseNodeInfo(settings.Node); err != nil {
-		return "That is not a valid node string."
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err := tunnel.NewMailbox(settings.OwnMailbox()).Ping(ctx); err != nil {
-		log.Printf("mailbox check: %v", err)
-		return "Your mailbox did not answer. Check the deployment ID and the auth key."
+	if err := tunnel.Setup(ctx, &settings, mailbox, node); err != nil {
+		return err.Error()
 	}
 	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
 		return err.Error()
@@ -202,9 +196,19 @@ func (a *App) SaveSettings(deploymentID, authKey, node string) string {
 	a.mutex.Lock()
 	a.state.Configured = true
 	a.state.Node = nodeLabel(settings.Node)
+	a.state.Backup = settings.Backup != ""
 	a.mutex.Unlock()
 	a.publish()
 	return ""
+}
+
+// SetupCode is the saved settings in one string, to set up another device; it is empty before setup.
+func (a *App) SetupCode() string {
+	settings, err := tunnel.LoadSettings(a.settingsPath)
+	if err != nil || settings.DeploymentID == "" {
+		return ""
+	}
+	return settings.SetupCode()
 }
 
 // SaveBackup checks a relay's node string and saves it as the backup route; an empty string removes the backup.

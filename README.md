@@ -20,8 +20,9 @@ The node sees the destinations of the traffic it carries, like any proxy.
 
 ## Using a node
 
-1. Deploy `apps_script/Code.gs` as a Web app (Execute as: Me, Who has access: Anyone) with your own `AUTH_KEY`.
-2. Run the client with a node string and point applications at `127.0.0.1:1080` (SOCKS5):
+1. Deploy `apps_script/Code.gs` as a Web app (Execute as: Me, Who has access: Anyone).
+2. In the app, paste the Web app URL and the node string. The app gives the mailbox a random key on first use, and Settings shows a setup code to set up more devices with one paste.
+3. Or write your own `AUTH_KEY` into `Code.gs` before deploying, run the client with a node string and point applications at `127.0.0.1:1080` (SOCKS5):
    ```
    mailbox-tunnel -mode client -deployment DEPLOYMENT_ID -key AUTH_KEY -node mtn://...
    ```

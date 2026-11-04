@@ -77,14 +77,11 @@
     <section id="page-settings" class="page">
       <h1>Settings</h1>
       <form id="settings">
-        <label>Deployment ID
-          <input id="deployment" autocomplete="off" spellcheck="false" required>
+        <label>Mailbox
+          <input id="mailbox" placeholder="https://script.google.com/macros/s/…/exec, or a setup code" autocomplete="off" spellcheck="false" required>
         </label>
-        <label>Auth key
-          <input id="key" autocomplete="off" spellcheck="false" required>
-        </label>
-        <label>Node
-          <input id="node-input" placeholder="mtn://…" autocomplete="off" spellcheck="false" required>
+        <label id="node-row">Node
+          <input id="node-input" placeholder="mtn://…" autocomplete="off" spellcheck="false">
         </label>
         <button id="save" class="primary" type="submit">Save</button>
         <p id="settings-message" class="message" hidden></p>
@@ -111,6 +108,12 @@
         <button id="save-backup" class="secondary" type="button">Save backup</button>
         <p id="backup-message" class="message" hidden></p>
       </div>
+      <div id="setup-code-section" class="route-section" hidden>
+        <div class="card-label">Setup code</div>
+        <p class="note small">Paste it into Mailbox on another device to set it up the same way. Keep it private: it opens your mailbox.</p>
+        <button id="show-setup-code" class="secondary" type="button">Show setup code</button>
+        <input id="setup-code" readonly hidden>
+      </div>
       <button id="reset" class="text-button" type="button" hidden>Reset settings</button>
     </section>
 
@@ -122,9 +125,10 @@
     <section id="page-help" class="page">
       <h1>Help</h1>
       <ol class="steps">
-        <li>Deploy <code>Code.gs</code> as an Apps Script Web app in your Google account and copy its deployment ID.</li>
+        <li>Deploy <code>Code.gs</code>, unchanged, as an Apps Script Web app in your Google account and copy the Web app URL.</li>
         <li>Get a node string (<code>mtn://…</code>) from a node you trust.</li>
         <li>Enter both in Settings, then press the power button.</li>
+        <li>For another device, paste the setup code from Settings instead.</li>
       </ol>
       <p class="note desktop-only">While connected, the Windows proxy points at the tunnel. It is restored when you disconnect or close the app.</p>
       <p class="note android-only">While connected, the whole phone uses the tunnel through Android's VPN.</p>
