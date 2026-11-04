@@ -4,33 +4,54 @@ on:
   workflow_dispatch:
     inputs:
       minutes:
-        description: How long to keep the node running
+        description: How long to keep the node running (at most 350)
         required: true
         default: "25"
+      chain:
+        description: Start the next node before this one stops, so clients move over without a gap
+        type: boolean
+        default: false
       trace:
         description: Log the timing of every put and wait (testing only)
         type: boolean
         default: false
 
-concurrency:
-  group: node
-  cancel-in-progress: true
+# No concurrency group: during a handover the next node must run beside this one.
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  # The next node starts this many minutes before the end, and this node takes no new registrations for the last HANDOVER minutes.
+  # HANDOVER is longer than the client's 4-minute refresh, so every client has moved before this node stops.
+  START_NEXT: 8
+  HANDOVER: 6
 
 jobs:
   node:
     runs-on: ubuntu-latest
     # The node stops itself after its -duration; this only catches a hung run.
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Build
-        run: go build -o mailbox-tunnel .
+        run: go build -trimpath -o mailbox-tunnel .
       - name: Run node
         env:
           MAILBOX_DEPLOYMENT_ID: ${{ secrets.MAILBOX_DEPLOYMENT_ID }}
           MAILBOX_AUTH_KEY: ${{ secrets.MAILBOX_AUTH_KEY }}
           MAILBOX_NODE_KEY: ${{ secrets.MAILBOX_NODE_KEY }}
-        run: ./mailbox-tunnel -mode node -duration "${{ inputs.minutes }}m" -trace=${{ inputs.trace }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MINUTES: ${{ inputs.minutes }}
+          CHAIN: ${{ inputs.chain }}
+          TRACE: ${{ inputs.trace }}
+        run: |
+          if [ "$CHAIN" = true ] && [ "$MINUTES" -gt "$START_NEXT" ]; then
+            (sleep $(( (MINUTES - START_NEXT) * 60 )) && gh workflow run node.yml --ref "$GITHUB_REF_NAME" -f minutes="$MINUTES" -f chain=true) &
+          fi
+          ./mailbox-tunnel -mode node -duration "${MINUTES}m" -handover "${HANDOVER}m" -trace="$TRACE"

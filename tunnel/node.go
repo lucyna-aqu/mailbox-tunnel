@@ -44,9 +44,24 @@ func NewNodeServer(registry *Mailbox, userConfig MailboxConfig, privateKey, publ
 	}
 }
 
-func (s *NodeServer) Run(ctx context.Context) {
+// Run serves until ctx ends.
+// With handover set and a deadline on ctx, it stops taking registrations that long before the deadline.
+// Its clients then reach the next node on their next refresh, while their current sessions keep running here.
+func (s *NodeServer) Run(ctx context.Context, handover time.Duration) {
+	listenCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok && handover > 0 {
+		var cancel context.CancelFunc
+		listenCtx, cancel = context.WithDeadline(ctx, deadline.Add(-handover))
+		defer cancel()
+		go func() {
+			<-listenCtx.Done()
+			if ctx.Err() == nil {
+				log.Printf("node: handing over, taking no new registrations (%d active)", s.SessionCount())
+			}
+		}()
+	}
 	for slot := range registrationSlots {
-		go s.listen(ctx, fmt.Sprintf("register:%d", slot))
+		go s.listen(listenCtx, fmt.Sprintf("register:%d", slot))
 	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -92,6 +107,13 @@ func (s *NodeServer) accept(ctx context.Context, entry registration) {
 	}
 	s.mutex.Unlock()
 
+	// A run this node never served belongs to a node that has handed over or restarted; the client starts a fresh one.
+	if !known && entry.Refresh {
+		if _, err := NewMailbox(s.userMailbox(entry)).Put(ctx, entry.RunID+":ack", []byte("lost"), ""); err != nil {
+			log.Printf("session %s: ack failed (%v)", entry.RunID, err)
+		}
+		return
+	}
 	if !known {
 		if exists {
 			s.endSession(entry.DeploymentID, session.runID, "replaced by a new run")
@@ -109,9 +131,14 @@ func (s *NodeServer) accept(ctx context.Context, entry registration) {
 	}
 }
 
-func (s *NodeServer) startSession(ctx context.Context, entry registration) (*nodeSession, error) {
+func (s *NodeServer) userMailbox(entry registration) MailboxConfig {
 	config := s.userConfig
 	config.DeploymentID, config.AuthKey = entry.DeploymentID, entry.AuthKey
+	return config
+}
+
+func (s *NodeServer) startSession(ctx context.Context, entry registration) (*nodeSession, error) {
+	config := s.userMailbox(entry)
 	up, down, err := newStreamCiphers(&s.privateKey, entry.ClientKey, entry.RunID)
 	if err != nil {
 		return nil, err

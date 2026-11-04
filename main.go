@@ -32,6 +32,7 @@ func main() {
 	googleIP := flag.String("google-ip", "", "Google IP to dial instead of script.google.com (default "+tunnel.DefaultGoogleIP+" for the client, direct for the node)")
 	frontDomain := flag.String("front-domain", tunnel.DefaultFrontDomain, "TLS SNI shown to the network when fronting")
 	duration := flag.Duration("duration", 0, "stop after this long (0 = until interrupted)")
+	handover := flag.Duration("handover", 0, "node: with -duration, take no new registrations this long before stopping, so clients move to the next node")
 	flag.IntVar(&tunnel.TestDropEvery, "test-drop-every", 0, "testing only: skip the first put of every Nth batch")
 	flag.BoolVar(&tunnel.Trace, "trace", false, "testing only: log the timing of every put, wait and backlog stall")
 	flag.Parse()
@@ -84,7 +85,7 @@ func main() {
 	log.Printf("mailbox OK (%s)", time.Since(started).Round(time.Millisecond))
 
 	if *mode == "node" {
-		if err := tunnel.RunNode(ctx, config, *nodeKey, *statusListen); err != nil {
+		if err := tunnel.RunNode(ctx, config, *nodeKey, *statusListen, *handover); err != nil {
 			log.Fatalf("%v (create a key with -mode keygen)", err)
 		}
 		return

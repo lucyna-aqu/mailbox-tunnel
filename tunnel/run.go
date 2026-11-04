@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -76,7 +77,8 @@ func RunClient(ctx context.Context, options ClientOptions) {
 
 // RunNode serves every mailbox registered through the registry mailbox until ctx ends.
 // With statusListen set it also serves a plain-text status page showing the node string.
-func RunNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen string) error {
+// See NodeServer.Run for handover.
+func RunNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen string, handover time.Duration) error {
 	privateKey, publicKey, err := parsePrivateKey(nodeKey)
 	if err != nil {
 		return fmt.Errorf("node key: %w", err)
@@ -98,7 +100,7 @@ func RunNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen 
 			}
 		}()
 	}
-	server.Run(ctx)
+	server.Run(ctx, handover)
 	return nil
 }
 

@@ -66,11 +66,11 @@ func (c *Client) onFrame(streamID uint32, frameType byte, payload []byte) {
 }
 
 // keepRegistered registers with the node and refreshes the registration, reporting Connected once accepted.
-// It returns when the node has lost this run (for example after a restart), so the caller can start a new one.
+// It returns when the node has lost this run (for example after a restart or a handover), so the caller can start a new one.
 func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) {
 	accepted := false
 	for ctx.Err() == nil {
-		known, err := c.register(ctx)
+		known, err := c.register(ctx, accepted)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("registration: %v, retrying", err)
@@ -98,12 +98,13 @@ func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) {
 	}
 }
 
-func (c *Client) register(ctx context.Context) (bool, error) {
+func (c *Client) register(ctx context.Context, refresh bool) (bool, error) {
 	sealed, err := sealRegistration(registration{
 		DeploymentID: c.own.DeploymentID,
 		AuthKey:      c.own.AuthKey,
 		RunID:        c.runID,
 		ClientKey:    c.publicKey[:],
+		Refresh:      refresh,
 	}, &c.node.PublicKey)
 	if err != nil {
 		return false, err

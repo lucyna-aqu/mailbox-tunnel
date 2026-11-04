@@ -80,6 +80,8 @@ type registration struct {
 	AuthKey      string `json:"k"`
 	RunID        string `json:"r"`
 	ClientKey    []byte `json:"c"`
+	// Refresh marks a run the node already accepted; a node that does not know it answers "lost" instead of starting a session.
+	Refresh bool `json:"f,omitempty"`
 }
 
 func sealRegistration(entry registration, nodePublicKey *[32]byte) ([]byte, error) {
