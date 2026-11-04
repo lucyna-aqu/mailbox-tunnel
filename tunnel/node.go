@@ -61,7 +61,7 @@ func (s *NodeServer) Run(ctx context.Context, handover time.Duration) {
 		}()
 	}
 	for slot := range registrationSlots {
-		go s.listen(listenCtx, fmt.Sprintf("register:%d", slot))
+		go s.listen(ctx, listenCtx, fmt.Sprintf("register:%d", slot))
 	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -75,11 +75,12 @@ func (s *NodeServer) Run(ctx context.Context, handover time.Duration) {
 	}
 }
 
-func (s *NodeServer) listen(ctx context.Context, key string) {
-	for ctx.Err() == nil {
-		sealed, err := s.registry.Take(ctx, key)
+// listen takes registrations until listenCtx ends; the sessions it starts live on ctx, so they outlast it.
+func (s *NodeServer) listen(ctx, listenCtx context.Context, key string) {
+	for listenCtx.Err() == nil {
+		sealed, err := s.registry.Take(listenCtx, key)
 		if err != nil {
-			if ctx.Err() == nil {
+			if listenCtx.Err() == nil {
 				log.Printf("registry %s: %v", key, err)
 				time.Sleep(2 * time.Second)
 			}
