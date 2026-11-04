@@ -54,7 +54,7 @@
           <div id="timer" class="card-value big">--:--:--</div>
         </div>
         <div class="card">
-          <div class="card-label">Ping to Google</div>
+          <div class="card-label">Ping</div>
           <div id="ping" class="card-value big">-- ms</div>
         </div>
         <div class="card wide">
@@ -68,7 +68,7 @@
         <div class="card wide">
           <div class="card-label">Proxy</div>
           <div id="proxy" class="card-value">Off</div>
-          <div class="card-label route-label">Route to Google</div>
+          <div class="card-label route-label">Route</div>
           <div id="route" class="card-value">Default</div>
         </div>
       </div>
@@ -103,6 +103,13 @@
         <div id="route-current" class="card-value"></div>
         <button id="scan" class="secondary" type="button">Find best route</button>
         <p id="scan-message" class="message" hidden></p>
+      </div>
+      <div id="backup-section" class="route-section desktop-only" hidden>
+        <div class="card-label">Backup route</div>
+        <div id="backup-current" class="card-value"></div>
+        <input id="backup-input" placeholder="mtn://… of a relay, empty to remove" autocomplete="off" spellcheck="false">
+        <button id="save-backup" class="secondary" type="button">Save backup</button>
+        <p id="backup-message" class="message" hidden></p>
       </div>
       <button id="reset" class="text-button" type="button" hidden>Reset settings</button>
     </section>

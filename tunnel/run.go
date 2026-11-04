@@ -23,13 +23,24 @@ const (
 	StatusConnected  Status = "connected"
 )
 
+// ClientRoute is one way to reach a node: the user's mailbox and the node to register with.
+type ClientRoute struct {
+	Name string // shown to the user
+	Own  MailboxConfig
+	Node NodeInfo
+}
+
 // ClientOptions configures RunClient.
 type ClientOptions struct {
-	Own      MailboxConfig
-	Node     NodeInfo
+	Own  MailboxConfig
+	Node NodeInfo
+	// Routes, when set, takes the place of Own and Node.
+	// The client stays on a route while it works and moves to the next one only when it stops working.
+	Routes   []ClientRoute
 	Listener net.Listener
-	OnStatus func(Status) // optional
-	FakeDNS  *FakeDNS     // optional; enables DNS over SOCKS5 UDP ASSOCIATE, used by the Android VPN
+	OnStatus func(Status)      // optional
+	OnRoute  func(name string) // optional; called whenever the client starts on a route
+	FakeDNS  *FakeDNS          // optional; enables DNS over SOCKS5 UDP ASSOCIATE, used by the Android VPN
 }
 
 // RunClient serves proxy connections until ctx ends, starting a new client run whenever the node loses the current one.
@@ -38,6 +49,14 @@ func RunClient(ctx context.Context, options ClientOptions) {
 	if onStatus == nil {
 		onStatus = func(Status) {}
 	}
+	onRoute := options.OnRoute
+	if onRoute == nil {
+		onRoute = func(string) {}
+	}
+	routes := options.Routes
+	if len(routes) == 0 {
+		routes = []ClientRoute{{Name: "Google", Own: options.Own, Node: options.Node}}
+	}
 	go func() {
 		<-ctx.Done()
 		options.Listener.Close()
@@ -45,9 +64,12 @@ func RunClient(ctx context.Context, options ClientOptions) {
 
 	var current atomic.Pointer[Client]
 	go func() {
+		index := 0
 		for ctx.Err() == nil {
+			route := routes[index]
+			onRoute(route.Name)
 			onStatus(StatusConnecting)
-			client, err := NewClient(options.Own, options.Node)
+			client, err := NewClient(route.Own, route.Node)
 			if err != nil {
 				log.Printf("client: %v", err)
 				return
@@ -56,8 +78,12 @@ func RunClient(ctx context.Context, options ClientOptions) {
 			clientCtx, cancel := context.WithCancel(ctx)
 			current.Store(client)
 			go client.run(clientCtx)
-			client.keepRegistered(clientCtx, onStatus)
+			down := client.keepRegistered(clientCtx, onStatus)
 			cancel()
+			if down && len(routes) > 1 {
+				index = (index + 1) % len(routes)
+				log.Printf("client: the %s route stopped working, moving to %s", route.Name, routes[index].Name)
+			}
 		}
 	}()
 

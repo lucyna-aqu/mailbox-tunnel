@@ -37,6 +37,8 @@ function render(state) {
   $("status-text").textContent = (statusText[state.status] || state.status) + connectedFor + scanning;
   $("route").textContent = $("route-current").textContent = state.route || "Default";
   $("route-section").hidden = !state.configured;
+  $("backup-section").hidden = !state.configured;
+  $("backup-current").textContent = state.backup ? "Set: used while Google does not work" : "Not set";
   $("auto-connect-row").hidden = !state.configured;
   $("auto-connect").checked = state.autoConnect;
   $("env-proxy-row").hidden = $("env-proxy-note").hidden = !state.configured;
@@ -135,6 +137,20 @@ $("scan").addEventListener("click", async () => {
   $("scan").disabled = false;
   message.textContent = result;
   scanProgress = "";
+});
+
+$("save-backup").addEventListener("click", async () => {
+  const message = $("backup-message");
+  const value = $("backup-input").value.trim();
+  message.hidden = false;
+  message.className = "message";
+  message.textContent = value ? "Checking the relay…" : "Removing the backup…";
+  $("save-backup").disabled = true;
+  const error = await backend().SaveBackup(value);
+  $("save-backup").disabled = false;
+  message.className = error ? "message bad" : "message";
+  message.textContent = error || (value ? "Saved. Reconnect to use it." : "Backup removed.");
+  if (!error) $("backup-input").value = "";
 });
 
 function onScanProgress(progress) {

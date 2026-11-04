@@ -27,6 +27,7 @@ func main() {
 	deploymentID := flag.String("deployment", os.Getenv("MAILBOX_DEPLOYMENT_ID"), "your Apps Script deployment ID (or MAILBOX_DEPLOYMENT_ID)")
 	authKey := flag.String("key", os.Getenv("MAILBOX_AUTH_KEY"), "AUTH_KEY from your Code.gs (or MAILBOX_AUTH_KEY)")
 	nodeString := flag.String("node", os.Getenv("MAILBOX_NODE"), "client: the node to use, mtn://... (or MAILBOX_NODE)")
+	backup := flag.String("backup", os.Getenv("MAILBOX_BACKUP"), "client: a relay's node string to use while the main route does not work (or MAILBOX_BACKUP)")
 	nodeKey := flag.String("node-key", os.Getenv("MAILBOX_NODE_KEY"), "node: private key from -mode keygen (or MAILBOX_NODE_KEY)")
 	listen := flag.String("listen", "127.0.0.1:1080", "client: SOCKS5 and HTTP proxy listen address; relay: mailbox listen address")
 	statusListen := flag.String("status-listen", os.Getenv("STATUS_LISTEN"), "node: serve a plain-text status page on this address, e.g. :7860 (or STATUS_LISTEN)")
@@ -106,10 +107,20 @@ func main() {
 		time.Sleep(5 * time.Second)
 		err = tunnel.NewMailbox(config).Ping(ctx)
 	}
-	if err != nil {
+	backupRoute, hasBackup := tunnel.RelayRoute(*backup)
+	if *backup != "" && !hasBackup {
+		log.Fatal("-backup must be a relay's node string")
+	}
+	// With a backup, a client starts even when its main mailbox is out of reach.
+	mainDown := err != nil
+	if mainDown && !(hasBackup && *mode == "client") {
 		log.Fatalf("mailbox unreachable: %v", err)
 	}
-	log.Printf("mailbox OK (%s)", time.Since(started).Round(time.Millisecond))
+	if mainDown {
+		log.Printf("mailbox unreachable (%v), starting on the backup", err)
+	} else {
+		log.Printf("mailbox OK (%s)", time.Since(started).Round(time.Millisecond))
+	}
 
 	if *mode == "node" {
 		if err := tunnel.RunNode(ctx, config, *nodeKey, *statusListen, *handover); err != nil {
@@ -125,7 +136,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	tunnel.RunClient(ctx, tunnel.ClientOptions{Own: config, Node: node, Listener: listener})
+	routes := []tunnel.ClientRoute{{Name: "Google", Own: config, Node: node}}
+	if hasBackup {
+		routes = append(routes, backupRoute)
+		if mainDown {
+			routes[0], routes[1] = routes[1], routes[0]
+		}
+	}
+	tunnel.RunClient(ctx, tunnel.ClientOptions{Routes: routes, Listener: listener})
 }
 
 // codespaceHost is the public host name GitHub Codespaces gives the listen port, or "" outside a codespace.

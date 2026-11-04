@@ -47,6 +47,7 @@ type Settings struct {
 	DeploymentID  string             `json:"deployment_id"`
 	AuthKey       string             `json:"auth_key"`
 	Node          string             `json:"node"`
+	Backup        string             `json:"backup,omitempty"` // a relay's node string, used while the main route does not work
 	GoogleIP      string             `json:"google_ip,omitempty"`
 	FrontDomain   string             `json:"front_domain,omitempty"`
 	AutoConnect   bool               `json:"auto_connect,omitempty"`
@@ -98,6 +99,20 @@ func (s Settings) Route() Route {
 func (s Settings) OwnMailbox() MailboxConfig {
 	route := s.Route()
 	return MailboxConfig{DeploymentID: s.DeploymentID, AuthKey: s.AuthKey, GoogleIP: route.GoogleIP, FrontDomain: route.FrontDomain}
+}
+
+// BackupRoute is the relay to fall back on; a relay serves its own mailbox, so its node string is all it needs.
+func (s Settings) BackupRoute() (ClientRoute, bool) {
+	return RelayRoute(s.Backup)
+}
+
+// RelayRoute turns a relay's node string into a route, or reports that it is not one.
+func RelayRoute(nodeString string) (ClientRoute, bool) {
+	node, err := ParseNodeInfo(nodeString)
+	if err != nil || !selfHosted(node.DeploymentID) {
+		return ClientRoute{}, false
+	}
+	return ClientRoute{Name: "Relay", Own: MailboxConfig{DeploymentID: node.DeploymentID, AuthKey: node.AuthKey}, Node: node}, true
 }
 
 // EnsureRoute checks the saved route and, when it no longer works on this network, scans for a new one and saves it.

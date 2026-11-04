@@ -57,6 +57,8 @@ type Mailbox struct {
 
 	// Recovered gets a signal when a call succeeds after network failures, for example after sleep or a Wi-Fi change.
 	Recovered chan struct{}
+	// Failing gets a signal when calls start failing, so the client can check its route at once.
+	Failing chan struct{}
 }
 
 // selfHosted reports whether a deployment names a self-hosted mailbox; Apps Script IDs never contain a dot.
@@ -103,6 +105,7 @@ func NewMailbox(config MailboxConfig) *Mailbox {
 	}
 	return &Mailbox{
 		Recovered: make(chan struct{}, 1),
+		Failing:   make(chan struct{}, 1),
 		config:    config,
 		client: &http.Client{
 			Transport: transport,
@@ -213,8 +216,11 @@ func (m *Mailbox) call(parent context.Context, request map[string]any) (map[stri
 		status, _, content, err = m.do(ctx, cancel, http.MethodGet, location, nil, answerLimit)
 	}
 	if err != nil {
-		if parent.Err() == nil {
-			m.failing.Store(true)
+		if parent.Err() == nil && !m.failing.Swap(true) {
+			select {
+			case m.Failing <- struct{}{}:
+			default:
+			}
 		}
 		return nil, err
 	}

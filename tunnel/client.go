@@ -65,26 +65,41 @@ func (c *Client) onFrame(streamID uint32, frameType byte, payload []byte) {
 	c.deliver(streamID, frameType, payload)
 }
 
+// routeDownAfter is how long registration keeps failing before the client tries another route.
+const routeDownAfter = 20 * time.Second
+
 // keepRegistered registers with the node and refreshes the registration, reporting Connected once accepted.
 // It returns when the node has lost this run (for example after a restart or a handover), so the caller can start a new one.
-func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) {
+// It returns true when registration has kept failing for routeDownAfter, so the caller can try another route.
+func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) bool {
 	accepted := false
+	var failingSince time.Time
 	for ctx.Err() == nil {
+		attempt := time.Now()
 		known, err := c.register(ctx, accepted)
 		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("registration: %v, retrying", err)
-				sleepContext(ctx, time.Duration(2+randomInt(4))*time.Second)
+			if ctx.Err() != nil {
+				return false
 			}
+			if failingSince.IsZero() {
+				failingSince = attempt
+			}
+			if time.Since(failingSince) > routeDownAfter {
+				log.Printf("registration: %v, giving up on this route", err)
+				return true
+			}
+			log.Printf("registration: %v, retrying", err)
+			sleepContext(ctx, time.Duration(2+randomInt(4))*time.Second)
 			continue
 		}
+		failingSince = time.Time{}
 		if !accepted {
 			accepted = true
 			log.Printf("client: node accepted run %s", c.runID)
 			onStatus(StatusConnected)
 		} else if !known {
 			log.Printf("client: node lost run %s, reconnecting", c.runID)
-			return
+			return false
 		}
 		select {
 		case <-ctx.Done():
@@ -94,8 +109,12 @@ func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) {
 		case <-c.mailbox.Recovered:
 			// The node ends a session a minute after its client went quiet, so ask at once.
 			log.Printf("client: network is back, checking the node")
+		case <-c.mailbox.Failing:
+			// A route that has gone down is found by registering, which then fails for routeDownAfter.
+			log.Printf("client: mailbox calls are failing, checking the route")
 		}
 	}
+	return false
 }
 
 func (c *Client) register(ctx context.Context, refresh bool) (bool, error) {

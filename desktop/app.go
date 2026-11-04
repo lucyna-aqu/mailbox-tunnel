@@ -33,6 +33,7 @@ type State struct {
 	Route       string `json:"route"`
 	AutoConnect bool   `json:"autoConnect"`
 	EnvProxy    bool   `json:"envProxy"`
+	Backup      bool   `json:"backup"`
 	Error       string `json:"error"`
 }
 
@@ -90,6 +91,7 @@ func (a *App) startup(ctx context.Context) {
 	a.state.Node = nodeLabel(settings.Node)
 	a.state.AutoConnect = settings.AutoConnect
 	a.state.EnvProxy = settings.SetEnvProxy
+	a.state.Backup = settings.Backup != ""
 	if a.state.Configured {
 		route := settings.Route()
 		a.state.Route = route.FrontDomain + " via " + route.GoogleIP
@@ -205,6 +207,36 @@ func (a *App) SaveSettings(deploymentID, authKey, node string) string {
 	return ""
 }
 
+// SaveBackup checks a relay's node string and saves it as the backup route; an empty string removes the backup.
+// It returns an error message or "".
+func (a *App) SaveBackup(nodeString string) string {
+	settings, err := tunnel.LoadSettings(a.settingsPath)
+	if err != nil {
+		return "Enter your settings first."
+	}
+	settings.Backup = strings.TrimSpace(nodeString)
+	if settings.Backup != "" {
+		route, ok := tunnel.RelayRoute(settings.Backup)
+		if !ok {
+			return "That is not a relay's node string."
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := tunnel.NewMailbox(route.Own).Ping(ctx); err != nil {
+			log.Printf("backup check: %v", err)
+			return "The relay did not answer. Check that it is running and its port is public."
+		}
+	}
+	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+		return err.Error()
+	}
+	a.mutex.Lock()
+	a.state.Backup = settings.Backup != ""
+	a.mutex.Unlock()
+	a.publish()
+	return ""
+}
+
 // Connect starts the tunnel and points the system proxy at it. It returns an error message or "".
 func (a *App) Connect() string {
 	a.mutex.Lock()
@@ -241,13 +273,28 @@ func (a *App) Connect() string {
 			a.publish()
 		}()
 
-		if !tunnel.EnsureRoute(ctx, a.settingsPath, &settings, a.scanProgress) {
+		backup, hasBackup := settings.BackupRoute()
+		var googleWorks bool
+		if hasBackup {
+			// With a backup there is no need to wait for a scan: the client starts on the relay and Google stays next in line.
+			_, googleWorks = tunnel.TestRoute(ctx, settings.OwnMailbox(), settings.Route())
+		} else {
+			googleWorks = tunnel.EnsureRoute(ctx, a.settingsPath, &settings, a.scanProgress)
+		}
+		if !googleWorks && !hasBackup {
 			if ctx.Err() == nil {
 				a.setError("No working route to Google was found on this network.")
 			}
 			return
 		}
-		a.setRoute(settings.Route())
+		googleRoute := settings.Route()
+		routes := []tunnel.ClientRoute{{Name: "Google", Own: settings.OwnMailbox(), Node: node}}
+		if hasBackup {
+			routes = append(routes, backup)
+			if !googleWorks {
+				routes[0], routes[1] = routes[1], routes[0]
+			}
+		}
 
 		listener, err := net.Listen("tcp", "127.0.0.1:1080")
 		if err != nil {
@@ -263,10 +310,10 @@ func (a *App) Connect() string {
 		a.mutex.Unlock()
 
 		tunnel.RunClient(ctx, tunnel.ClientOptions{
-			Own:      settings.OwnMailbox(),
-			Node:     node,
+			Routes:   routes,
 			Listener: listener,
 			OnStatus: a.setStatus,
+			OnRoute:  func(name string) { a.showRoute(name, googleRoute) },
 		})
 		if saved, err := tunnel.LoadSettings(a.settingsPath); err == nil {
 			tunnel.RestoreLeftoverProxy(a.settingsPath, &saved)
@@ -307,6 +354,18 @@ func (a *App) setRoute(route tunnel.Route) {
 	a.publish()
 }
 
+// showRoute shows which route the client is on.
+func (a *App) showRoute(name string, google tunnel.Route) {
+	if name == "Google" {
+		a.setRoute(google)
+		return
+	}
+	a.mutex.Lock()
+	a.state.Route = "Backup relay"
+	a.mutex.Unlock()
+	a.publish()
+}
+
 // Disconnect stops the tunnel and waits until the system proxy is restored.
 func (a *App) Disconnect() {
 	a.mutex.Lock()
@@ -331,7 +390,7 @@ func (a *App) ResetSettings() {
 		return
 	}
 	a.mutex.Lock()
-	a.state.Configured, a.state.Node = false, ""
+	a.state.Configured, a.state.Node, a.state.Backup = false, "", false
 	a.mutex.Unlock()
 	a.publish()
 }
