@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,7 +42,7 @@ const (
 var errSilent = errors.New("no data moved, gave up")
 
 type MailboxConfig struct {
-	DeploymentID string
+	DeploymentID string // an Apps Script deployment ID, or the host name of a self-hosted mailbox
 	AuthKey      string
 	GoogleIP     string // if set, dial this IP and send FrontDomain as SNI
 	FrontDomain  string
@@ -58,7 +59,16 @@ type Mailbox struct {
 	Recovered chan struct{}
 }
 
+// selfHosted reports whether a deployment names a self-hosted mailbox; Apps Script IDs never contain a dot.
+func selfHosted(deploymentID string) bool {
+	return strings.Contains(deploymentID, ".")
+}
+
 func NewMailbox(config MailboxConfig) *Mailbox {
+	// A self-hosted mailbox is reached directly; fronting only works for Google's own hosts.
+	if selfHosted(config.DeploymentID) {
+		config.GoogleIP = ""
+	}
 	transport := &http2.Transport{
 		DialTLSContext: func(ctx context.Context, network, address string, _ *tls.Config) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
@@ -191,6 +201,9 @@ func (m *Mailbox) call(parent context.Context, request map[string]any) (map[stri
 		return nil, err
 	}
 	execURL := "https://script.google.com/macros/s/" + m.config.DeploymentID + "/exec"
+	if selfHosted(m.config.DeploymentID) {
+		execURL = "https://" + m.config.DeploymentID + "/"
+	}
 	answerWithin := answerLimit
 	if op := request["op"]; op == "wait" || op == "take" {
 		answerWithin = waitTimeout + 10*time.Second
