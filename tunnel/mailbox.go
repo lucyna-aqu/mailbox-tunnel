@@ -22,12 +22,23 @@ import (
 )
 
 const (
-	waitTimeout      = 20 * time.Second
-	callTimeout      = waitTimeout + 30*time.Second
+	waitTimeout = 20 * time.Second
+
+	// A call is cut only when it goes silent, so data that keeps moving on a slow line is not cut.
+	// Before its answer starts, a call may stay silent for answerLimit, and a long poll for its whole wait as well.
+	silenceLimit = 15 * time.Second
+	answerLimit  = 20 * time.Second
+	silenceCheck = 250 * time.Millisecond
+
+	// callTimeout only catches a call that keeps trickling without ever finishing.
+	callTimeout      = 3 * time.Minute
 	connectTimeout   = 10 * time.Second
 	compressAbove    = 1024
 	maxResponseBytes = 64 << 20
 )
+
+// errSilent reports a call that was given up because no data moved for too long.
+var errSilent = errors.New("no data moved, gave up")
 
 type MailboxConfig struct {
 	DeploymentID string
@@ -180,9 +191,13 @@ func (m *Mailbox) call(parent context.Context, request map[string]any) (map[stri
 		return nil, err
 	}
 	execURL := "https://script.google.com/macros/s/" + m.config.DeploymentID + "/exec"
-	status, location, content, err := m.do(ctx, http.MethodPost, execURL, body)
+	answerWithin := answerLimit
+	if op := request["op"]; op == "wait" || op == "take" {
+		answerWithin = waitTimeout + 10*time.Second
+	}
+	status, location, content, err := m.do(ctx, cancel, http.MethodPost, execURL, body, answerWithin)
 	if err == nil && status >= 300 && status < 400 && location != "" {
-		status, _, content, err = m.do(ctx, http.MethodGet, location, nil)
+		status, _, content, err = m.do(ctx, cancel, http.MethodGet, location, nil, answerLimit)
 	}
 	if err != nil {
 		if parent.Err() == nil {
@@ -235,7 +250,8 @@ func Latency() time.Duration {
 	return latency.average
 }
 
-func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (int, string, []byte, error) {
+// do sends one request; if it goes silent, its watch gives up on the whole call through cancel.
+func (m *Mailbox) do(ctx context.Context, cancel context.CancelFunc, method, rawURL string, body []byte, answerWithin time.Duration) (int, string, []byte, error) {
 	target, err := url.Parse(rawURL)
 	if err != nil {
 		return 0, "", nil, err
@@ -255,9 +271,19 @@ func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (i
 		writer.Close()
 		body = packed.Bytes()
 	}
+	// The call's context is cancelled only when the call ends or the watch fires, as cancelling a finished request early upsets the connection.
+	watch := newSilenceWatch(silenceLimit)
+	stop := make(chan struct{})
+	defer close(stop)
+	go watch.run(stop, cancel)
+	newBody := func() io.Reader {
+		return &progressReader{reader: bytes.NewReader(body), watch: watch, remaining: len(body), onDone: func() { watch.expect(answerWithin) }}
+	}
 	var bodyReader io.Reader
-	if body != nil {
-		bodyReader = bytes.NewReader(body)
+	if body == nil {
+		watch.expect(answerWithin)
+	} else {
+		bodyReader = newBody()
 	}
 	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), bodyReader)
 	if err != nil {
@@ -265,6 +291,9 @@ func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (i
 	}
 	request.Host = target.Host
 	if body != nil {
+		request.ContentLength = int64(len(body))
+		// The transport resends the body from here when it has to retry on a fresh connection.
+		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(newBody()), nil }
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if compressed {
@@ -272,17 +301,92 @@ func (m *Mailbox) do(ctx context.Context, method, rawURL string, body []byte) (i
 	}
 	response, err := m.client.Do(request)
 	if err != nil {
-		// Drop the URL from the error: it contains the deployment ID, which must not end up in logs.
-		var urlError *url.Error
-		if errors.As(err, &urlError) {
-			err = urlError.Err
-		}
-		return 0, "", nil, err
+		return 0, "", nil, callError(err, watch)
 	}
 	defer response.Body.Close()
-	content, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+	// The answer has started, so from here only silence in the middle of it counts.
+	watch.expect(silenceLimit)
+	content, err := io.ReadAll(&progressReader{reader: io.LimitReader(response.Body, maxResponseBytes), watch: watch})
 	if err != nil {
-		return 0, "", nil, err
+		return 0, "", nil, callError(err, watch)
 	}
 	return response.StatusCode, response.Header.Get("Location"), content, nil
+}
+
+// callError names a call the silence watch gave up on, and drops the URL from other errors.
+// The URL contains the deployment ID, which must not end up in logs.
+func callError(err error, watch *silenceWatch) error {
+	if watch.fired.Load() {
+		return errSilent
+	}
+	var urlError *url.Error
+	if errors.As(err, &urlError) {
+		return urlError.Err
+	}
+	return err
+}
+
+// silenceWatch cancels a call once no bytes have moved for longer than its current limit.
+type silenceWatch struct {
+	last  atomic.Int64 // unix nanoseconds of the last progress
+	limit atomic.Int64 // allowed silence in nanoseconds
+	fired atomic.Bool
+}
+
+func newSilenceWatch(limit time.Duration) *silenceWatch {
+	watch := &silenceWatch{}
+	watch.expect(limit)
+	return watch
+}
+
+// expect starts a new period of allowed silence.
+// It stores the time before the limit, and run loads them the other way round, so a check never mixes a new limit with an old time.
+func (w *silenceWatch) expect(limit time.Duration) {
+	w.last.Store(time.Now().UnixNano())
+	w.limit.Store(int64(limit))
+}
+
+func (w *silenceWatch) progress() {
+	w.last.Store(time.Now().UnixNano())
+}
+
+func (w *silenceWatch) run(stop <-chan struct{}, cancel context.CancelFunc) {
+	ticker := time.NewTicker(silenceCheck)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			limit := w.limit.Load()
+			if time.Now().UnixNano()-w.last.Load() > limit {
+				w.fired.Store(true)
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+// progressReader reports every read to a silenceWatch, and calls onDone once its last byte has been read.
+type progressReader struct {
+	reader    io.Reader
+	watch     *silenceWatch
+	remaining int
+	onDone    func()
+}
+
+func (r *progressReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	if n > 0 {
+		r.watch.progress()
+		if r.onDone != nil {
+			r.remaining -= n
+			if r.remaining <= 0 {
+				r.onDone()
+				r.onDone = nil
+			}
+		}
+	}
+	return n, err
 }
