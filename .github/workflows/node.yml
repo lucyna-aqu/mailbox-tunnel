@@ -57,6 +57,7 @@ jobs:
             exit 1
           fi
           if [ "$CHAIN" = true ]; then
-            (sleep $(( (MINUTES - START_NEXT) * 60 )) && gh workflow run node.yml --ref "$GITHUB_REF_NAME" -f minutes="$MINUTES" -f chain=true) &
+            # GitHub's API fails now and then with a 5xx error, so the handoff tries a few times; the watchdog heals a chain that still breaks.
+            (sleep $(( (MINUTES - START_NEXT) * 60 )) && for attempt in 1 2 3; do gh workflow run node.yml --ref "$GITHUB_REF_NAME" -f minutes="$MINUTES" -f chain=true && break; sleep 20; done) &
           fi
           ./mailbox-tunnel -mode node -duration "${MINUTES}m" -handover "${HANDOVER}m" -trace="$TRACE"

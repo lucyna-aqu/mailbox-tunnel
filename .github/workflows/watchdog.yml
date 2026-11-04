@@ -38,4 +38,9 @@ jobs:
             exit 0
           fi
           echo "No node is running, starting one."
-          gh workflow run node.yml -f minutes="$MINUTES" -f chain="$CHAIN"
+          # GitHub's API fails now and then with a 5xx error, so try a few times.
+          for attempt in 1 2 3; do
+            gh workflow run node.yml -f minutes="$MINUTES" -f chain="$CHAIN" && exit 0
+            sleep 20
+          done
+          exit 1
