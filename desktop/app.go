@@ -25,19 +25,21 @@ const (
 
 // State is what the window shows.
 type State struct {
-	Configured  bool   `json:"configured"`
-	Node        string `json:"node"`
-	Status      string `json:"status"`
-	ConnectedAt int64  `json:"connectedAt"` // Unix milliseconds, 0 when not connected
-	Address     string `json:"address"`
-	SystemProxy bool   `json:"systemProxy"`
-	Route       string `json:"route"`
-	AutoConnect bool   `json:"autoConnect"`
-	EnvProxy    bool   `json:"envProxy"`
-	Backup      bool   `json:"backup"`
-	PreferRelay bool   `json:"preferRelay"`
-	Error       string `json:"error"`
-	Version     string `json:"version"`
+	Configured  bool           `json:"configured"`
+	Node        string         `json:"node"`
+	Status      string         `json:"status"`
+	ConnectedAt int64          `json:"connectedAt"` // Unix milliseconds, 0 when not connected
+	Address     string         `json:"address"`
+	SystemProxy bool           `json:"systemProxy"`
+	Route       string         `json:"route"`
+	AutoConnect bool           `json:"autoConnect"`
+	EnvProxy    bool           `json:"envProxy"`
+	Backup      bool           `json:"backup"`
+	PreferRelay bool           `json:"preferRelay"`
+	Error       string         `json:"error"`
+	Version     string         `json:"version"`
+	Update      *tunnel.Update `json:"update"`      // a newer release, or nil
+	UpdateKnown bool           `json:"updateKnown"` // whether a check has succeeded
 }
 
 // Traffic is the total relayed for local applications, plus the current round trip to Google.
@@ -76,6 +78,9 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startTray()
 	a.watchSessionEnd()
+	if updateRepo != "" {
+		go a.watchForUpdates()
+	}
 	sink := io.Writer(logSink{a})
 	if file, err := tunnel.OpenLogFile(); err == nil {
 		sink = io.MultiWriter(sink, file)
@@ -123,6 +128,31 @@ func (a *App) SetAutoConnect(enabled bool) {
 	a.state.AutoConnect = enabled
 	a.mutex.Unlock()
 	a.publish()
+}
+
+// watchForUpdates looks for a newer release now and every few hours; a failed check changes nothing.
+func (a *App) watchForUpdates() {
+	for {
+		if update, err := tunnel.CheckForUpdate(context.Background(), updateRepo); err != nil {
+			log.Printf("update check: %v", err)
+		} else {
+			a.mutex.Lock()
+			a.state.Update, a.state.UpdateKnown = update, true
+			a.mutex.Unlock()
+			a.publish()
+		}
+		time.Sleep(6 * time.Hour)
+	}
+}
+
+// OpenUpdate opens the newer release's page in the browser.
+func (a *App) OpenUpdate() {
+	a.mutex.Lock()
+	update := a.state.Update
+	a.mutex.Unlock()
+	if update != nil && strings.HasPrefix(update.Page, "https://github.com/") {
+		runtime.BrowserOpenURL(a.ctx, update.Page)
+	}
 }
 
 // SetPreferRelay saves whether connecting tries the relay before Google. It applies from the next connect.

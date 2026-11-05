@@ -14,6 +14,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// updateRepo is where app releases are published, as "owner/name".
+// Release builds set it with -ldflags "-X main.updateRepo=owner/name"; without it the app does not look for updates.
+var updateRepo string
+
 func main() {
 	// One client at a time: a second launch brings the open window forward instead of competing for the mailbox.
 	if !tunnel.AcquireSingleInstance() {

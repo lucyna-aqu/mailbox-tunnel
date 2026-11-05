@@ -104,7 +104,15 @@ function render(state) {
       : "از اتصال بعدی اعمال می‌شود. اگر مسیر اول کار نکند، برنامه خودش به مسیر دوم می‌رود.";
   $("auto-connect").checked = state.autoConnect;
   $("env-proxy").checked = state.envProxy;
-  $("app-version").textContent = state.version ? "v" + state.version : "";
+  $("update-banner").hidden = !state.update;
+  $("page-home").classList.toggle("with-update", !!state.update);
+  $("update-version").textContent = state.update ? "v" + state.update.version : "";
+  // Each version number is isolated so it reads left to right inside the Persian line.
+  const isolate = (text) => "⁦" + text + "⁩";
+  let version = state.version ? isolate("v" + state.version) : "";
+  if (state.update) version += " · نسخهٔ تازه: " + isolate("v" + state.update.version);
+  else if (state.updateKnown) version += " · آخرین نسخه را دارید";
+  $("app-version").textContent = version;
   showError(state.error);
 }
 
@@ -201,6 +209,7 @@ $("show-setup-code").addEventListener("click", async () => {
 });
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
+$("open-update").addEventListener("click", () => backend().OpenUpdate());
 $("prefer-google").addEventListener("click", () => backend().SetPreferRelay(false));
 $("prefer-relay").addEventListener("click", () => backend().SetPreferRelay(true));
 $("auto-connect").addEventListener("change", (event) => backend().SetAutoConnect(event.target.checked));

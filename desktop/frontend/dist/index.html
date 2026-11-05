@@ -29,6 +29,11 @@
 
   <main>
     <section id="page-home" class="page active">
+      <div id="update-banner" class="update-banner" hidden>
+        <svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>
+        <span class="update-text">نسخهٔ تازه آماده است: <span id="update-version" dir="ltr"></span></span>
+        <button id="open-update" class="text-button strong" type="button">دانلود</button>
+      </div>
       <div class="hero">
         <button id="power" class="power" type="button" aria-label="Connect">
           <svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>
@@ -152,7 +157,7 @@
           <button id="edit-setup" class="text-button strong" type="button">تغییر Mailbox یا Node</button>
           <button id="reset" class="text-button" type="button">پاک کردن همهٔ تنظیمات</button>
         </div>
-        <div id="app-version" class="version" dir="ltr"></div>
+        <div id="app-version" class="version"></div>
       </div>
     </section>
 
