@@ -35,6 +35,7 @@ type State struct {
 	EnvProxy    bool   `json:"envProxy"`
 	Backup      bool   `json:"backup"`
 	Error       string `json:"error"`
+	Version     string `json:"version"`
 }
 
 // Traffic is the total relayed for local applications, plus the current round trip to Google.
@@ -66,7 +67,7 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{state: State{Status: statusDisconnected}}
+	return &App{state: State{Status: statusDisconnected, Version: tunnel.Version}}
 }
 
 func (a *App) startup(ctx context.Context) {

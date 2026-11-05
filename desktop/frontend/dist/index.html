@@ -1,137 +1,167 @@
 <!doctype html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mailbox-tunnel</title>
+  <title>Mailbox Tunnel</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="disconnected">
   <nav class="sidebar">
+    <img class="logo" src="logo.png" alt="Mailbox Tunnel">
     <button class="nav active" data-page="home" type="button">
       <svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>
-      <span>Connect</span>
+      <span>اتصال</span>
     </button>
     <button class="nav" data-page="settings" type="button">
       <svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
-      <span>Settings</span>
+      <span>تنظیمات</span>
     </button>
     <button class="nav" data-page="logs" type="button">
       <svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h1M4 12h1M4 18h1"/></svg>
-      <span>Logs</span>
+      <span>گزارش‌ها</span>
     </button>
     <button class="nav" data-page="help" type="button">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.7.3-1.2 1-1.2 1.7v.6"/><path d="M12 17.2v.1"/></svg>
-      <span>Help</span>
+      <span>راهنما</span>
     </button>
   </nav>
 
   <main>
     <section id="page-home" class="page active">
       <div class="hero">
-        <div class="glow"></div>
         <button id="power" class="power" type="button" aria-label="Connect">
           <svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg>
         </button>
       </div>
 
-      <div class="status-line">
-        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-        <span id="status-text">Not connected</span>
+      <div class="status">
+        <div id="status-text" class="status-text" dir="ltr">Not connected</div>
+        <div id="proxy" class="status-detail" dir="ltr">Press to connect</div>
       </div>
       <p id="error" class="error" hidden></p>
 
       <div class="cards">
-        <button class="card wide link-card" data-goto="settings" type="button">
-          <div>
-            <div class="card-label">Node</div>
-            <div id="node" class="card-value">Not set</div>
-          </div>
-          <svg class="chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+        <button class="card link-card" data-goto="settings" type="button">
+          <div class="card-label">Node</div>
+          <div id="node" class="card-value" dir="ltr">Not set</div>
         </button>
         <div class="card">
-          <div class="card-label">Time connected</div>
-          <div id="timer" class="card-value big">--:--:--</div>
+          <div class="card-label">Route</div>
+          <div id="route" class="card-value" dir="ltr">Google</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Time</div>
+          <div id="timer" class="card-value" dir="ltr">—</div>
         </div>
         <div class="card">
           <div class="card-label">Ping</div>
-          <div id="ping" class="card-value big">-- ms</div>
+          <div id="ping" class="card-value" dir="ltr">—</div>
         </div>
-        <div class="card wide">
-          <div class="card-label">Traffic</div>
-          <div class="card-value traffic">
-            <span><span class="down">↓</span> <span id="rate-down">0 B/s</span></span>
-            <span><span class="up">↑</span> <span id="rate-up">0 B/s</span></span>
-            <span class="total" id="total"></span>
+        <div class="card traffic">
+          <div>
+            <div class="card-label">Download</div>
+            <div id="rate-down" class="card-value" dir="ltr">0 B/s</div>
           </div>
-        </div>
-        <div class="card wide">
-          <div class="card-label">Proxy</div>
-          <div id="proxy" class="card-value">Off</div>
-          <div class="card-label route-label">Route</div>
-          <div id="route" class="card-value">Default</div>
+          <div>
+            <div class="card-label">Upload</div>
+            <div id="rate-up" class="card-value" dir="ltr">0 B/s</div>
+          </div>
+          <div>
+            <div class="card-label">Total</div>
+            <div id="total" class="card-value" dir="ltr">0 KB</div>
+          </div>
         </div>
       </div>
     </section>
 
     <section id="page-settings" class="page">
-      <h1>Settings</h1>
-      <form id="settings">
-        <label>Mailbox
-          <input id="mailbox" placeholder="https://script.google.com/macros/s/…/exec, or a setup code" autocomplete="off" spellcheck="false" required>
-        </label>
-        <label id="node-row">Node
-          <input id="node-input" placeholder="mtn://…" autocomplete="off" spellcheck="false">
-        </label>
-        <button id="save" class="primary" type="submit">Save</button>
-        <p id="settings-message" class="message" hidden></p>
-      </form>
-      <label id="auto-connect-row" class="check" hidden>
-        <input id="auto-connect" type="checkbox">
-        Connect when the app starts
-      </label>
-      <label id="env-proxy-row" class="check desktop-only" hidden>
-        <input id="env-proxy" type="checkbox">
-        Also route command-line tools (HTTPS_PROXY)
-      </label>
-      <p id="env-proxy-note" class="note small desktop-only" hidden>Applies from the next connect. Terminals opened before connecting keep their old settings.</p>
-      <div id="route-section" class="route-section" hidden>
-        <div class="card-label">Route to Google</div>
-        <div id="route-current" class="card-value"></div>
-        <button id="scan" class="secondary" type="button">Find best route</button>
-        <p id="scan-message" class="message" hidden></p>
+      <div id="setup-view">
+        <h1>راه‌اندازی</h1>
+        <p class="intro">آدرس صندوق خودتان و رشتهٔ نود را بچسبانید. اگر روی دستگاه دیگری راه‌اندازی کرده‌اید، کد راه‌اندازی آن را در Mailbox بچسبانید.</p>
+        <form id="settings">
+          <label>Mailbox
+            <input id="mailbox" dir="ltr" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false" required>
+          </label>
+          <label id="node-row">Node
+            <input id="node-input" dir="ltr" placeholder="mtn://…" autocomplete="off" spellcheck="false">
+          </label>
+          <button id="save" class="primary" type="submit">ذخیره</button>
+          <p id="settings-message" class="message" hidden></p>
+        </form>
+        <div class="row-links">
+          <button class="text-button" data-goto="help" type="button">صندوق ندارم؛ چطور بسازم؟</button>
+          <button id="cancel-setup" class="text-button" type="button" hidden>انصراف</button>
+        </div>
       </div>
-      <div id="backup-section" class="route-section desktop-only" hidden>
-        <div class="card-label">Backup route</div>
-        <div id="backup-current" class="card-value"></div>
-        <input id="backup-input" placeholder="mtn://… of a relay, empty to remove" autocomplete="off" spellcheck="false">
-        <button id="save-backup" class="secondary" type="button">Save backup</button>
-        <p id="backup-message" class="message" hidden></p>
+
+      <div id="settings-view" hidden>
+        <h1>تنظیمات</h1>
+
+        <section class="panel desktop-only">
+          <div class="panel-head">
+            <h2>رلهٔ گیتهاب</h2>
+            <span id="backup-current" class="badge" dir="ltr">Not set up</span>
+          </div>
+          <p class="note">مسیر پشتیبان و سریع‌تر، از حساب GitHub خودتان. وقتی گوگل کار نکند، برنامه خودش سراغ رله می‌رود.</p>
+          <input id="backup-input" dir="ltr" placeholder="mtn://… (empty to remove)" autocomplete="off" spellcheck="false">
+          <button id="save-backup" class="secondary" type="button">ذخیرهٔ رله</button>
+          <p id="backup-message" class="message" hidden></p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>راه رسیدن به گوگل</h2>
+          </div>
+          <div id="route-current" class="note" dir="ltr"></div>
+          <button id="scan" class="secondary" type="button">پیدا کردن بهترین راه روی این شبکه</button>
+          <p id="scan-message" class="message" hidden></p>
+        </section>
+
+        <section class="panel">
+          <label class="check">
+            <input id="auto-connect" type="checkbox">
+            وقتی برنامه باز شد، خودش وصل شود
+          </label>
+          <label class="check desktop-only">
+            <input id="env-proxy" type="checkbox">
+            ابزارهای خط فرمان هم از تونل بروند
+          </label>
+          <p class="note small desktop-only">از اتصال بعدی اعمال می‌شود. ترمینال‌هایی که از قبل باز بوده‌اند تنظیم قبلی را نگه می‌دارند.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>دستگاه دیگر</h2>
+          </div>
+          <p class="note">کد راه‌اندازی را روی گوشی یا کامپیوتر دیگر بچسبانید. این کد صندوق شما را باز می‌کند؛ به کسی ندهید.</p>
+          <button id="show-setup-code" class="secondary" type="button">نمایش کد راه‌اندازی</button>
+          <input id="setup-code" dir="ltr" readonly hidden>
+        </section>
+
+        <div class="row-links">
+          <button id="edit-setup" class="text-button strong" type="button">تغییر Mailbox یا Node</button>
+          <button id="reset" class="text-button" type="button">پاک کردن همهٔ تنظیمات</button>
+        </div>
+        <div id="app-version" class="version" dir="ltr"></div>
       </div>
-      <div id="setup-code-section" class="route-section" hidden>
-        <div class="card-label">Setup code</div>
-        <p class="note small">Paste it into Mailbox on another device to set it up the same way. Keep it private: it opens your mailbox.</p>
-        <button id="show-setup-code" class="secondary" type="button">Show setup code</button>
-        <input id="setup-code" readonly hidden>
-      </div>
-      <button id="reset" class="text-button" type="button" hidden>Reset settings</button>
     </section>
 
     <section id="page-logs" class="page">
-      <h1>Logs</h1>
-      <pre id="log"></pre>
+      <h1>گزارش‌ها</h1>
+      <pre id="log" dir="ltr"></pre>
     </section>
 
     <section id="page-help" class="page">
-      <h1>Help</h1>
+      <h1>راهنما</h1>
       <ol class="steps">
-        <li>Deploy <code>Code.gs</code>, unchanged, as an Apps Script Web app in your Google account and copy the Web app URL.</li>
-        <li>Get a node string (<code>mtn://…</code>) from a node you trust.</li>
-        <li>Enter both in Settings, then press the power button.</li>
-        <li>For another device, paste the setup code from Settings instead.</li>
+        <li><code dir="ltr">Code.gs</code> را بدون هیچ تغییری در حساب Google خودتان به‌صورت Web app دیپلوی کنید و آدرس آن را کپی کنید.</li>
+        <li>رشتهٔ نود (<code dir="ltr">mtn://…</code>) را از نودی که به آن اعتماد دارید بگیرید.</li>
+        <li>هر دو را در تنظیمات بچسبانید و دکمهٔ اتصال را بزنید.</li>
+        <li>برای دستگاه دیگر، به‌جای این‌ها کد راه‌اندازی را از تنظیمات بچسبانید.</li>
       </ol>
-      <p class="note desktop-only">While connected, the Windows proxy points at the tunnel. It is restored when you disconnect or close the app.</p>
-      <p class="note android-only">While connected, the whole phone uses the tunnel through Android's VPN.</p>
+      <p class="note desktop-only">وقتی وصل هستید، پروکسی ویندوز به تونل اشاره می‌کند و با قطع اتصال یا بستن برنامه به حالت قبل برمی‌گردد.</p>
+      <p class="note android-only">وقتی وصل هستید، کل گوشی از طریق VPN اندروید از تونل استفاده می‌کند.</p>
     </section>
   </main>
   <script src="bridge.js"></script>

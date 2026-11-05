@@ -44,6 +44,7 @@ type state struct {
 	AutoConnect bool   `json:"autoConnect"`
 	EnvProxy    bool   `json:"envProxy"`
 	Error       string `json:"error"`
+	Version     string `json:"version"`
 }
 
 var controller struct {
@@ -79,7 +80,7 @@ func SetDataDir(dir string) {
 		log.SetOutput(sink)
 		settings, err := tunnel.LoadSettings(settingsPath())
 		controller.Lock()
-		controller.state.Status = statusDisconnected
+		controller.state.Status, controller.state.Version = statusDisconnected, tunnel.Version
 		if err == nil {
 			applySettings(settings)
 		}
@@ -161,7 +162,7 @@ func ResetSettings() {
 		return
 	}
 	controller.Lock()
-	controller.state = state{Status: statusDisconnected}
+	controller.state = state{Status: statusDisconnected, Version: tunnel.Version}
 	controller.Unlock()
 }
 

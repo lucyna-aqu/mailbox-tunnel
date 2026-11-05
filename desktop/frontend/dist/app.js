@@ -2,9 +2,34 @@ const statusText = {
   disconnected: "Not connected",
   scanning: "Finding a route…",
   connecting: "Connecting…",
-  connected: "Protected",
+  connected: "Connected",
 };
+
+// The backend speaks English; explanations are shown in Persian, and anything unknown is shown as it is.
+const persian = {
+  "Enter your settings first.": "اول تنظیمات را وارد کنید.",
+  "That is not a relay's node string.": "این رشتهٔ یک رله نیست.",
+  "The relay did not answer. Check that it is running and its port is public.": "رله جواب نداد. مطمئن شوید روشن است و پورتش عمومی است.",
+  "That is not a valid node string.": "این رشتهٔ نود درست نیست.",
+  "No working route to Google was found on this network.": "روی این شبکه راهی به گوگل پیدا نشد.",
+  "That setup code is incomplete. Copy all of it again.": "کد راه‌اندازی ناقص است. دوباره کامل کپی‌اش کنید.",
+  "That is not a Web app address. Copy the URL Google shows after deploying, the one ending in /exec.": "این آدرس Web app نیست. آدرسی را کپی کنید که گوگل بعد از دیپلوی نشان می‌دهد و آخرش /exec است.",
+  "Your mailbox did not answer. Check the address and try again.": "صندوق جواب نداد. آدرس را بررسی کنید و دوباره امتحان کنید.",
+  "This mailbox already belongs to another device. Paste the setup code from that device instead.": "این صندوق مال دستگاه دیگری است. به‌جای آدرس، کد راه‌اندازی آن دستگاه را بچسبانید.",
+  "This mailbox runs an older Code.gs. Deploy the latest Code.gs and try again.": "این صندوق Code.gs قدیمی دارد. آخرین Code.gs را دیپلوی کنید و دوباره امتحان کنید.",
+  "Could not create a key on this device.": "ساختن کلید روی این دستگاه ممکن نشد.",
+};
+
+function translate(message) {
+  if (!message) return "";
+  if (persian[message]) return persian[message];
+  const found = /^Using (.+) via (.+) \((\d+) ms\)\. Reconnect to use it\.$/.exec(message);
+  if (found) return `راه تازه: ${found[1]} از ${found[2]} (${found[3]} ms). برای استفاده دوباره وصل شوید.`;
+  return message;
+}
+
 let scanProgress = "";
+let editingSetup = false;
 
 const $ = (id) => document.getElementById(id);
 const backend = () => window.go.main.App;
@@ -29,42 +54,61 @@ function formatRate(bytesPerSecond) {
   return Math.round(bytesPerSecond) + " B/s";
 }
 
+function formatSize(bytes) {
+  if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  return Math.round(bytes / 1024) + " KB";
+}
+
+// The route arrives as "<front domain> via <Google IP>", or "Backup relay" while on the relay.
+function routeName(route) {
+  return route === "Backup relay" ? "GitHub relay" : "Google";
+}
+
+function statusDetail(state) {
+  if (state.status === "scanning") return scanProgress ? "Testing routes " + scanProgress : "Testing routes";
+  if (state.status === "disconnected") return state.configured ? "Press to connect" : "Set up in Settings first";
+  if (state.address === "VPN") return "Android VPN on";
+  if (!state.address) return "";
+  return state.systemProxy ? "Windows proxy on · " + state.address : state.address + " · set your apps to use it";
+}
+
 function render(state) {
   current = state;
   document.body.className = state.status;
-  const connectedFor = state.connectedAt ? " • " + formatDuration(Date.now() - state.connectedAt) : "";
-  const scanning = state.status === "scanning" && scanProgress ? " " + scanProgress : "";
-  $("status-text").textContent = (statusText[state.status] || state.status) + connectedFor + scanning;
-  $("route").textContent = $("route-current").textContent = state.route || "Default";
-  $("route-section").hidden = !state.configured;
-  $("backup-section").hidden = !state.configured;
-  $("setup-code-section").hidden = !state.configured;
+  $("status-text").textContent = statusText[state.status] || state.status;
+  $("proxy").textContent = statusDetail(state);
+  $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
+  $("node").textContent = state.node || "Not set";
+  $("route").textContent = routeName(state.route);
+  $("timer").textContent = state.connectedAt ? formatDuration(Date.now() - state.connectedAt) : "—";
+
+  $("setup-view").hidden = state.configured && !editingSetup;
+  $("settings-view").hidden = !state.configured || editingSetup;
+  $("cancel-setup").hidden = !state.configured;
   if (!state.configured) {
     $("setup-code").hidden = true;
     $("setup-code").value = "";
   }
-  $("backup-current").textContent = state.backup ? "Set: used while Google does not work" : "Not set";
-  $("auto-connect-row").hidden = !state.configured;
+  $("route-current").textContent = state.route && state.route !== "Backup relay" ? state.route : "";
+  $("backup-current").textContent = state.backup ? "Set" : "Not set up";
+  $("backup-current").classList.toggle("on", !!state.backup);
   $("auto-connect").checked = state.autoConnect;
-  $("env-proxy-row").hidden = $("env-proxy-note").hidden = !state.configured;
   $("env-proxy").checked = state.envProxy;
-  $("power").setAttribute("aria-label", state.status === "disconnected" ? "Connect" : "Disconnect");
-  $("node").textContent = state.node || "Not set";
-  if (state.address === "VPN") {
-    $("proxy").textContent = "Android VPN on";
-  } else {
-    $("proxy").textContent = state.address
-      ? state.address + (state.systemProxy ? " · Windows proxy on" : " · set your apps to use it")
-      : "Off";
-  }
-  $("timer").textContent = state.connectedAt ? formatDuration(Date.now() - state.connectedAt) : "--:--:--";
-  $("reset").hidden = !state.configured;
+  $("app-version").textContent = state.version ? "v" + state.version : "";
   showError(state.error);
 }
 
 function showError(message) {
   $("error").hidden = !message;
-  $("error").textContent = message || "";
+  $("error").textContent = translate(message);
+}
+
+function showMessage(id, text, bad) {
+  const message = $(id);
+  message.hidden = !text;
+  message.className = bad ? "message bad" : "message";
+  message.textContent = translate(text);
 }
 
 function appendLog(line) {
@@ -85,15 +129,9 @@ async function tick() {
   } else {
     $("rate-down").textContent = $("rate-up").textContent = "0 B/s";
   }
-  $("total").textContent = traffic.received + traffic.sent > 0 ? formatSize(traffic.received + traffic.sent) + " total" : "";
-  $("ping").textContent = live && traffic.latencyMs > 0 ? traffic.latencyMs + " ms" : "-- ms";
+  $("total").textContent = formatSize(traffic.received + traffic.sent);
+  $("ping").textContent = live && traffic.latencyMs > 0 ? traffic.latencyMs + " ms" : "—";
   lastTraffic = { ...traffic, time: now };
-}
-
-function formatSize(bytes) {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
-  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
-  return Math.round(bytes / 1024) + " KB";
 }
 
 document.querySelectorAll(".nav").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.page)));
@@ -113,25 +151,36 @@ $("power").addEventListener("click", async () => {
 
 $("settings").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const message = $("settings-message");
-  message.hidden = false;
-  message.className = "message";
-  message.textContent = "Checking your mailbox…";
+  showMessage("settings-message", "در حال بررسی صندوق…");
   $("save").disabled = true;
   const error = await backend().SaveSettings($("mailbox").value, $("node-input").value);
   $("save").disabled = false;
-  message.className = error ? "message bad" : "message";
-  message.textContent = error || "Saved.";
-  if (!error) {
-    $("mailbox").value = $("node-input").value = "";
-    $("node-row").hidden = false;
-    showPage("home");
+  if (error) {
+    showMessage("settings-message", error, true);
+    return;
   }
+  showMessage("settings-message", "");
+  $("mailbox").value = $("node-input").value = "";
+  $("node-row").hidden = false;
+  editingSetup = false;
+  render(current);
+  showPage("home");
 });
 
 // A setup code already holds the node.
 $("mailbox").addEventListener("input", (event) => {
   $("node-row").hidden = event.target.value.trim().startsWith("mtc://");
+});
+
+$("edit-setup").addEventListener("click", () => {
+  editingSetup = true;
+  render(current);
+});
+
+$("cancel-setup").addEventListener("click", () => {
+  editingSetup = false;
+  showMessage("settings-message", "");
+  render(current);
 });
 
 $("show-setup-code").addEventListener("click", async () => {
@@ -147,35 +196,32 @@ $("auto-connect").addEventListener("change", (event) => backend().SetAutoConnect
 $("env-proxy").addEventListener("change", (event) => backend().SetEnvProxy(event.target.checked));
 
 $("scan").addEventListener("click", async () => {
-  const message = $("scan-message");
-  message.hidden = false;
-  message.className = "message";
-  message.textContent = "Testing routes on this network…";
+  showMessage("scan-message", "در حال آزمودن راه‌ها روی این شبکه…");
   $("scan").disabled = true;
   const result = await backend().FindRoute();
   $("scan").disabled = false;
-  message.textContent = result;
+  showMessage("scan-message", result, result === "No working route to Google was found on this network.");
   scanProgress = "";
 });
 
 $("save-backup").addEventListener("click", async () => {
-  const message = $("backup-message");
   const value = $("backup-input").value.trim();
-  message.hidden = false;
-  message.className = "message";
-  message.textContent = value ? "Checking the relay…" : "Removing the backup…";
+  showMessage("backup-message", value ? "در حال بررسی رله…" : "در حال حذف رله…");
   $("save-backup").disabled = true;
   const error = await backend().SaveBackup(value);
   $("save-backup").disabled = false;
-  message.className = error ? "message bad" : "message";
-  message.textContent = error || (value ? "Saved. Reconnect to use it." : "Backup removed.");
-  if (!error) $("backup-input").value = "";
+  if (error) {
+    showMessage("backup-message", error, true);
+    return;
+  }
+  showMessage("backup-message", value ? "ذخیره شد. برای استفاده دوباره وصل شوید." : "رله حذف شد.");
+  $("backup-input").value = "";
 });
 
 function onScanProgress(progress) {
   scanProgress = progress.done + "/" + progress.total;
   if (!$("scan").disabled) return;
-  $("scan-message").textContent = "Testing routes on this network… " + scanProgress;
+  $("scan-message").textContent = "در حال آزمودن راه‌ها روی این شبکه… " + scanProgress;
 }
 
 window.addEventListener("DOMContentLoaded", async () => {

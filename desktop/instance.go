@@ -14,7 +14,7 @@ var (
 	messageBox          = user32.NewProc("MessageBoxW")
 )
 
-const windowTitle = "mailbox-tunnel"
+const windowTitle = "Mailbox Tunnel"
 
 // focusRunningWindow brings an already open window of this app to the front. It returns false when there is none.
 func focusRunningWindow() bool {
