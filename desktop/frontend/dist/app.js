@@ -93,6 +93,15 @@ function render(state) {
   $("route-current").textContent = state.route && state.route !== "Backup relay" ? state.route : "";
   $("backup-current").textContent = state.backup ? "Set" : "Not set up";
   $("backup-current").classList.toggle("on", !!state.backup);
+  const preferRelay = !!(state.backup && state.preferRelay);
+  $("prefer-google").setAttribute("aria-pressed", String(!preferRelay));
+  $("prefer-relay").setAttribute("aria-pressed", String(preferRelay));
+  $("prefer-relay").disabled = !state.backup;
+  $("prefer-note").textContent = !state.backup
+    ? "برای انتخاب رله، اول رلهٔ گیتهاب را در پایین راه‌اندازی کنید."
+    : state.status === "disconnected"
+      ? "اگر مسیر اول کار نکند، برنامه خودش به مسیر دوم می‌رود."
+      : "از اتصال بعدی اعمال می‌شود. اگر مسیر اول کار نکند، برنامه خودش به مسیر دوم می‌رود.";
   $("auto-connect").checked = state.autoConnect;
   $("env-proxy").checked = state.envProxy;
   $("app-version").textContent = state.version ? "v" + state.version : "";
@@ -192,6 +201,8 @@ $("show-setup-code").addEventListener("click", async () => {
 });
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
+$("prefer-google").addEventListener("click", () => backend().SetPreferRelay(false));
+$("prefer-relay").addEventListener("click", () => backend().SetPreferRelay(true));
 $("auto-connect").addEventListener("change", (event) => backend().SetAutoConnect(event.target.checked));
 $("env-proxy").addEventListener("change", (event) => backend().SetEnvProxy(event.target.checked));
 

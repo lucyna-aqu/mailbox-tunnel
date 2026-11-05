@@ -48,6 +48,7 @@ type Settings struct {
 	AuthKey       string             `json:"auth_key"`
 	Node          string             `json:"node"`
 	Backup        string             `json:"backup,omitempty"` // a relay's node string, used while the main route does not work
+	PreferRelay   bool               `json:"prefer_relay,omitempty"`
 	GoogleIP      string             `json:"google_ip,omitempty"`
 	FrontDomain   string             `json:"front_domain,omitempty"`
 	AutoConnect   bool               `json:"auto_connect,omitempty"`

@@ -35,6 +35,7 @@ type State struct {
 	AutoConnect bool   `json:"autoConnect"`
 	EnvProxy    bool   `json:"envProxy"`
 	Backup      bool   `json:"backup"`
+	PreferRelay bool   `json:"preferRelay"`
 	Error       string `json:"error"`
 	Version     string `json:"version"`
 }
@@ -96,6 +97,7 @@ func (a *App) startup(ctx context.Context) {
 	a.state.AutoConnect = settings.AutoConnect
 	a.state.EnvProxy = settings.SetEnvProxy
 	a.state.Backup = settings.Backup != ""
+	a.state.PreferRelay = settings.PreferRelay
 	if a.state.Configured {
 		route := settings.Route()
 		a.state.Route = route.FrontDomain + " via " + route.GoogleIP
@@ -119,6 +121,23 @@ func (a *App) SetAutoConnect(enabled bool) {
 	}
 	a.mutex.Lock()
 	a.state.AutoConnect = enabled
+	a.mutex.Unlock()
+	a.publish()
+}
+
+// SetPreferRelay saves whether connecting tries the relay before Google. It applies from the next connect.
+func (a *App) SetPreferRelay(enabled bool) {
+	settings, err := tunnel.LoadSettings(a.settingsPath)
+	if err != nil {
+		return
+	}
+	settings.PreferRelay = enabled
+	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+		a.setError(err.Error())
+		return
+	}
+	a.mutex.Lock()
+	a.state.PreferRelay = enabled
 	a.mutex.Unlock()
 	a.publish()
 }
@@ -288,8 +307,12 @@ func (a *App) Connect() string {
 		}()
 
 		backup, hasBackup := settings.BackupRoute()
+		preferRelay := hasBackup && settings.PreferRelay
 		var googleWorks bool
-		if hasBackup {
+		if preferRelay {
+			// The relay goes first, so Google is only checked when the client falls back to it.
+			googleWorks = true
+		} else if hasBackup {
 			// With a backup there is no need to wait for a scan: the client starts on the relay and Google stays next in line.
 			_, googleWorks = tunnel.TestRoute(ctx, settings.OwnMailbox(), settings.Route())
 		} else {
@@ -305,7 +328,7 @@ func (a *App) Connect() string {
 		routes := []tunnel.ClientRoute{{Name: "Google", Own: settings.OwnMailbox(), Node: node}}
 		if hasBackup {
 			routes = append(routes, backup)
-			if !googleWorks {
+			if preferRelay || !googleWorks {
 				routes[0], routes[1] = routes[1], routes[0]
 			}
 		}
