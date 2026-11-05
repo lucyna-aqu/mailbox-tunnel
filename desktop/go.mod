@@ -5,6 +5,7 @@ go 1.27.1
 replace github.com/lucyna-aqu/mailbox-tunnel => ../
 
 require (
+	fyne.io/systray v1.11.0
 	github.com/lucyna-aqu/mailbox-tunnel v0.0.0
 	github.com/wailsapp/wails/v2 v2.10.2
 	golang.org/x/sys v0.49.0

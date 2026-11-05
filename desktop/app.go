@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"fyne.io/systray"
 	"github.com/lucyna-aqu/mailbox-tunnel/tunnel"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -72,6 +73,8 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.startTray()
+	a.watchSessionEnd()
 	sink := io.Writer(logSink{a})
 	if file, err := tunnel.OpenLogFile(); err == nil {
 		sink = io.MultiWriter(sink, file)
@@ -137,9 +140,15 @@ func (a *App) SetEnvProxy(enabled bool) {
 	a.publish()
 }
 
-// beforeClose disconnects, which also restores the system proxy, before the window closes.
-func (a *App) beforeClose(context.Context) bool {
+// beforeClose hides the window to the tray, where the app keeps running.
+// Only quitting from the tray closes it, after disconnecting, which also restores the system proxy.
+func (a *App) beforeClose(ctx context.Context) bool {
+	if !quitting.Load() {
+		runtime.WindowHide(ctx)
+		return true
+	}
 	a.Disconnect()
+	systray.Quit()
 	return false
 }
 
@@ -421,7 +430,9 @@ func (a *App) setError(message string) {
 }
 
 func (a *App) publish() {
+	state := a.State()
+	a.updateTray(state)
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "state", a.State())
+		runtime.EventsEmit(a.ctx, "state", state)
 	}
 }
