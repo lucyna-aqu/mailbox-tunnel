@@ -133,6 +133,10 @@ func (s *NodeServer) accept(ctx context.Context, entry registration) {
 	}
 
 	state := map[bool]string{true: "known", false: "new"}[known]
+	// A client that asked for the express lane is told the node opened it; older clients get the answer they know.
+	if entry.Express {
+		state += " x"
+	}
 	if _, err := session.mailbox.Put(ctx, entry.RunID+":ack", []byte(state), ""); err != nil {
 		log.Printf("session %s: ack failed (%v)", entry.RunID, err)
 	}
@@ -161,6 +165,14 @@ func (s *NodeServer) startSession(ctx context.Context, entry registration) (*nod
 		window = relayWindowBytes
 	}
 	endpoint := NewNodeEndpoint(session.mailbox, entry.RunID, down, up, maxBatch, window)
+	if entry.Express {
+		expressUp, expressDown, err := newExpressCiphers(&s.privateKey, entry.ClientKey, entry.RunID)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		endpoint.startExpress(sessionCtx, entry.RunID, "down", "up", expressDown, expressUp, maxBatch)
+	}
 	go endpoint.run(sessionCtx)
 	go s.watchClient(sessionCtx, entry.DeploymentID, entry.RunID, endpoint.sender)
 

@@ -27,12 +27,12 @@ func TestTakeFramesLetsAShortReplyPassALongDownload(t *testing.T) {
 		sender.Send(1, frameData, []byte(fmt.Sprintf("bulk%d", i)))
 	}
 	sender.Send(2, frameData, []byte("reply"))
-	got := framesIn(sender.takeFrames(3 * (frameHeaderSize + 5)))
+	got := framesIn(sender.takeFrames(3*(frameHeaderSize+5), nil))
 	want := []string{"1:bulk0", "2:reply", "1:bulk1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("first batch %v, want %v", got, want)
 	}
-	if got := framesIn(sender.takeFrames(largeBatchBytes)); fmt.Sprint(got) != "[1:bulk2 1:bulk3 1:bulk4]" {
+	if got := framesIn(sender.takeFrames(largeBatchBytes, nil)); fmt.Sprint(got) != "[1:bulk2 1:bulk3 1:bulk4]" {
 		t.Fatalf("second batch %v, want the rest of stream 1 in order", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestDropDiscardsWaitingAndLaterFrames(t *testing.T) {
 	sender.Send(2, frameData, []byte("keep"))
 	sender.Drop(1, true)
 	sender.Send(1, frameData, []byte("late"))
-	if got := framesIn(sender.takeFrames(largeBatchBytes)); fmt.Sprint(got) != "[2:keep]" {
+	if got := framesIn(sender.takeFrames(largeBatchBytes, nil)); fmt.Sprint(got) != "[2:keep]" {
 		t.Fatalf("batch %v, want only stream 2", got)
 	}
 	if sender.pending() != 0 {

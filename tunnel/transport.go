@@ -97,6 +97,10 @@ type Sender struct {
 	pendingBytes    int
 	dropped         map[uint32]bool // streams whose other end has closed while this end still runs
 	nextSequence    int
+	hold            func(streamID uint32) bool // streams whose frames must wait, set on the bulk lane
+	sealedIn        map[uint32]int             // the last batch each stream's frames went into, kept on the express lane
+	onProgress      func()                     // called when the receiver has taken more
+	statusEvery     time.Duration              // how often to ask for progress while batches wait
 	retained        map[int]*sentBatch
 	retainedBytes   int
 	progress        int
@@ -115,19 +119,38 @@ var Trace bool
 
 func NewSender(mailbox *Mailbox, prefix string, cipher streamCipher, maxBatch, parallelism, window int) *Sender {
 	return &Sender{
-		mailbox:   mailbox,
-		prefix:    prefix,
-		cipher:    cipher,
-		maxBatch:  maxBatch,
-		window:    window,
-		dropEvery: TestDropEvery,
-		queues:    map[uint32][][]byte{},
-		dropped:   map[uint32]bool{},
-		retained:  map[int]*sentBatch{},
-		wake:      make(chan struct{}, 1),
-		slots:     make(chan struct{}, parallelism),
-		Stalled:   make(chan struct{}, 1),
+		mailbox:     mailbox,
+		prefix:      prefix,
+		cipher:      cipher,
+		maxBatch:    maxBatch,
+		window:      window,
+		dropEvery:   TestDropEvery,
+		queues:      map[uint32][][]byte{},
+		dropped:     map[uint32]bool{},
+		retained:    map[int]*sentBatch{},
+		statusEvery: statusInterval,
+		wake:        make(chan struct{}, 1),
+		slots:       make(chan struct{}, parallelism),
+		Stalled:     make(chan struct{}, 1),
 	}
+}
+
+func (s *Sender) wakeUp() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Finished reports whether every frame of the stream has reached the receiver; only the express lane keeps track.
+func (s *Sender) Finished(streamID uint32) bool {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if _, waiting := s.queues[streamID]; waiting {
+		return false
+	}
+	sequence, sealed := s.sealedIn[streamID]
+	return !sealed || sequence < s.progress
 }
 
 func (s *Sender) progressKey() string {
@@ -152,10 +175,7 @@ func (s *Sender) Send(streamID uint32, frameType byte, data []byte) {
 	}
 	s.pendingBytes += len(frame)
 	s.mutex.Unlock()
-	select {
-	case s.wake <- struct{}{}:
-	default:
-	}
+	s.wakeUp()
 }
 
 // Drop discards the frames still waiting for a stream whose other end has closed, since that end would throw them away.
@@ -178,20 +198,30 @@ func (s *Sender) Drop(streamID uint32, stillRunning bool) {
 	if stillRunning {
 		s.dropped[streamID] = true
 	}
+	delete(s.sealedIn, streamID)
 }
 
 // takeFrames builds a batch of whole frames, one frame from each waiting stream in turn; the caller holds the mutex.
-func (s *Sender) takeFrames(limit int) []byte {
+// Held streams keep their frames and their place. The streams that went into the batch are added to included when it is not nil.
+func (s *Sender) takeFrames(limit int, included map[uint32]bool) []byte {
 	var batch []byte
-	for len(s.order) > 0 {
-		streamID := s.order[0]
+	skipped := 0
+	for skipped < len(s.order) {
+		streamID := s.order[skipped]
+		if s.hold != nil && s.hold(streamID) {
+			skipped++
+			continue
+		}
 		queue := s.queues[streamID]
 		if len(batch) > 0 && len(batch)+len(queue[0]) > limit {
 			break
 		}
 		batch = append(batch, queue[0]...)
 		s.pendingBytes -= len(queue[0])
-		s.order = s.order[1:]
+		if included != nil {
+			included[streamID] = true
+		}
+		s.order = append(s.order[:skipped], s.order[skipped+1:]...)
 		if len(queue) > 1 {
 			s.queues[streamID] = queue[1:]
 			s.order = append(s.order, streamID)
@@ -247,9 +277,23 @@ func (s *Sender) Run(ctx context.Context) {
 			if len(s.retained) == 0 {
 				limit = min(limit, smallBatchBytes)
 			}
+			var included map[uint32]bool
+			if s.sealedIn != nil {
+				included = map[uint32]bool{}
+			}
+			frames := s.takeFrames(limit, included)
+			if len(frames) == 0 {
+				// Only held frames are waiting; the express lane wakes this sender when they may go.
+				s.mutex.Unlock()
+				<-s.slots
+				break
+			}
 			sequence := s.nextSequence
 			s.nextSequence++
-			batch := s.cipher.seal(sequence, s.takeFrames(limit))
+			for streamID := range included {
+				s.sealedIn[streamID] = sequence
+			}
+			batch := s.cipher.seal(sequence, frames)
 			if len(s.retained) == 0 {
 				s.progressMovedAt = time.Now()
 			}
@@ -341,7 +385,8 @@ func (s *Sender) updateProgress(progress int) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.progressSeenAt = time.Now()
-	if progress > s.progress {
+	moved := progress > s.progress
+	if moved {
 		s.progressMovedAt = s.progressSeenAt
 	}
 	for ; s.progress < progress; s.progress++ {
@@ -350,12 +395,20 @@ func (s *Sender) updateProgress(progress int) {
 			delete(s.retained, s.progress)
 		}
 	}
+	for streamID, sequence := range s.sealedIn {
+		if sequence < s.progress {
+			delete(s.sealedIn, streamID)
+		}
+	}
+	if moved && s.onProgress != nil {
+		go s.onProgress()
+	}
 }
 
 // retransmitLoop re-puts the batch the receiver is stuck on.
 // Every stallRetransmits tries on the same batch it signals Stalled, since the receiver may be gone.
 func (s *Sender) retransmitLoop(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(min(time.Second, s.statusEvery))
 	defer ticker.Stop()
 	lastStuck, stuckCount := -1, 0
 	for {
@@ -366,7 +419,7 @@ func (s *Sender) retransmitLoop(ctx context.Context) {
 		}
 
 		s.mutex.Lock()
-		needsStatus := len(s.retained) > 0 && time.Since(s.progressSeenAt) > statusInterval
+		needsStatus := len(s.retained) > 0 && time.Since(s.progressSeenAt) > s.statusEvery
 		s.mutex.Unlock()
 		if needsStatus {
 			if progress, err := s.mailbox.Status(ctx, s.progressKey()); err == nil {

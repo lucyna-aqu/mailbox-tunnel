@@ -82,6 +82,8 @@ type registration struct {
 	ClientKey    []byte `json:"c"`
 	// Refresh marks a run the node already accepted; a node that does not know it answers "lost" instead of starting a session.
 	Refresh bool `json:"f,omitempty"`
+	// Express asks for the express lane; nodes from before it ignore the field and answer without it.
+	Express bool `json:"x,omitempty"`
 }
 
 func sealRegistration(entry registration, nodePublicKey *[32]byte) ([]byte, error) {
@@ -114,6 +116,15 @@ type streamCipher struct {
 
 // newStreamCiphers derives the client-to-node and node-to-client ciphers from an X25519 exchange.
 func newStreamCiphers(privateKey *[32]byte, peerPublicKey []byte, runID string) (up, down streamCipher, err error) {
+	return deriveStreamCiphers(privateKey, peerPublicKey, runID, "")
+}
+
+// newExpressCiphers derives the express lane's ciphers; their own keys keep its sequence numbers from repeating a nonce of the bulk lane.
+func newExpressCiphers(privateKey *[32]byte, peerPublicKey []byte, runID string) (up, down streamCipher, err error) {
+	return deriveStreamCiphers(privateKey, peerPublicKey, runID, " express")
+}
+
+func deriveStreamCiphers(privateKey *[32]byte, peerPublicKey []byte, runID, lane string) (up, down streamCipher, err error) {
 	shared, err := curve25519.X25519(privateKey[:], peerPublicKey)
 	if err != nil {
 		return up, down, err
@@ -126,10 +137,10 @@ func newStreamCiphers(privateKey *[32]byte, peerPublicKey []byte, runID string) 
 		aead, err := chacha20poly1305.New(key)
 		return streamCipher{aead: aead}, err
 	}
-	if up, err = derive("mailbox-tunnel up"); err != nil {
+	if up, err = derive("mailbox-tunnel up" + lane); err != nil {
 		return up, down, err
 	}
-	down, err = derive("mailbox-tunnel down")
+	down, err = derive("mailbox-tunnel down" + lane)
 	return up, down, err
 }
 

@@ -73,12 +73,28 @@ func (b *inbox) pop() ([]byte, bool) {
 	}
 }
 
+// A new stream's first bytes go on a small express lane of their own, so they need not queue behind the window a long download has sealed.
+// Once a stream has sent expressBytes it moves to the bulk lane, whose frames for it wait until the express lane has delivered all of its earlier ones.
+const (
+	expressBytes        = 256_000
+	expressWindowBytes  = 1_000_000
+	expressStatusEvery  = 500 * time.Millisecond
+	expressParallelism  = 1
+	expressReceiveAhead = 1
+	bulkLane            = -1
+)
+
 // Endpoint is the state shared by both tunnel ends.
 type Endpoint struct {
-	sender   *Sender
-	receiver *Receiver
-	mutex    sync.Mutex
-	inboxes  map[uint32]*inbox
+	sender          *Sender
+	receiver        *Receiver
+	express         *Sender // nil until both ends have agreed on the express lane
+	expressReceiver *Receiver
+	onFrame         func(uint32, byte, []byte)
+	mailbox         *Mailbox
+	mutex           sync.Mutex
+	inboxes         map[uint32]*inbox
+	lanes           map[uint32]int // bytes each stream has sent on the express lane, or bulkLane
 }
 
 // endpointShape sets the largest outgoing batch, how much is sealed ahead, and how many calls run in parallel each way.
@@ -95,8 +111,80 @@ func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func
 	return &Endpoint{
 		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, shape.maxBatch, shape.sendParallelism, shape.window),
 		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher, window: shape.receiveWindow},
+		onFrame:  onFrame,
+		mailbox:  mailbox,
 		inboxes:  map[uint32]*inbox{},
+		lanes:    map[uint32]int{},
 	}
+}
+
+// startExpress opens the express lane under the key prefixes <base>:<outgoing>x and <base>:<incoming>x.
+// Streams that started before it stay on the bulk lane.
+func (e *Endpoint) startExpress(ctx context.Context, base, outgoing, incoming string, sendCipher, receiveCipher streamCipher, maxBatch int) {
+	express := NewSender(e.mailbox, base+":"+outgoing+"x", sendCipher, maxBatch, expressParallelism, expressWindowBytes)
+	express.sealedIn = map[uint32]int{}
+	express.statusEvery = expressStatusEvery
+	express.onProgress = e.sender.wakeUp
+	parser := &frameParser{onFrame: e.onFrame}
+	receiver := &Receiver{mailbox: e.mailbox, prefix: base + ":" + incoming + "x", onBytes: parser.feed, cipher: receiveCipher, window: expressReceiveAhead}
+	e.sender.mutex.Lock()
+	e.sender.hold = func(streamID uint32) bool { return !express.Finished(streamID) }
+	e.sender.mutex.Unlock()
+	e.mutex.Lock()
+	e.express, e.expressReceiver = express, receiver
+	e.mutex.Unlock()
+	go express.Run(ctx)
+	go receiver.Run(ctx)
+}
+
+// send queues a frame on the stream's lane: the express lane for its first expressBytes, then the bulk lane.
+func (e *Endpoint) send(streamID uint32, frameType byte, data []byte) {
+	e.mutex.Lock()
+	lane, seen := e.lanes[streamID]
+	if !seen {
+		lane = bulkLane
+		if e.express != nil {
+			lane = 0
+		}
+	}
+	sender := e.sender
+	if lane != bulkLane && lane+len(data) <= expressBytes {
+		lane += len(data)
+		sender = e.express
+	} else {
+		lane = bulkLane
+	}
+	if frameType == frameClose {
+		delete(e.lanes, streamID)
+	} else {
+		e.lanes[streamID] = lane
+	}
+	e.mutex.Unlock()
+	sender.Send(streamID, frameType, data)
+}
+
+// backlog is what the lanes still hold for the receiver.
+func (e *Endpoint) backlog() int {
+	e.mutex.Lock()
+	express := e.express
+	e.mutex.Unlock()
+	if express == nil {
+		return e.sender.Backlog()
+	}
+	return e.sender.Backlog() + express.Backlog()
+}
+
+// drop discards a closed stream's waiting frames on both lanes.
+func (e *Endpoint) drop(streamID uint32, stillRunning bool) {
+	e.mutex.Lock()
+	express := e.express
+	delete(e.lanes, streamID)
+	e.mutex.Unlock()
+	if express != nil {
+		express.Drop(streamID, stillRunning)
+	}
+	e.sender.Drop(streamID, stillRunning)
+	e.sender.wakeUp()
 }
 
 // run moves batches until ctx ends, then closes every open stream.
@@ -132,7 +220,7 @@ func (e *Endpoint) deliver(streamID uint32, frameType byte, payload []byte) {
 	// The other end forgets a stream once it closes, so whatever this end still has waiting for it would only be thrown away there.
 	// Dropping it is what makes jumping in a video fast: the old download no longer drains through the line first.
 	if frameType == frameClose {
-		e.sender.Drop(streamID, box != nil)
+		e.drop(streamID, box != nil)
 	}
 	if box == nil {
 		return
@@ -153,20 +241,20 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 			n, err := conn.Read(buffer)
 			if n > 0 {
 				stalledAt := time.Now()
-				for e.sender.Backlog() > e.sender.MaxBacklog() {
+				for e.backlog() > e.sender.MaxBacklog() {
 					time.Sleep(50 * time.Millisecond)
 				}
 				if Trace && time.Since(stalledAt) > 50*time.Millisecond {
 					log.Printf("trace backlog full for %dms", time.Since(stalledAt).Milliseconds())
 				}
-				e.sender.Send(streamID, frameData, buffer[:n])
+				e.send(streamID, frameData, buffer[:n])
 				bytesFromApps.Add(int64(n))
 			}
 			if err != nil {
 				break
 			}
 		}
-		e.sender.Send(streamID, frameClose, nil)
+		e.send(streamID, frameClose, nil)
 		done <- struct{}{}
 	}()
 	go func() {
@@ -214,7 +302,7 @@ func (n *NodeEndpoint) serve(streamID uint32, target string, box *inbox) {
 	conn, err := net.DialTimeout("tcp", target, 15*time.Second)
 	if err != nil {
 		log.Printf("stream %d: connect failed (%v)", streamID, err)
-		n.sender.Send(streamID, frameClose, nil)
+		n.send(streamID, frameClose, nil)
 		n.forget(streamID)
 		return
 	}

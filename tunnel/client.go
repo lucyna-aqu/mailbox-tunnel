@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,6 +27,8 @@ type Client struct {
 	fakeDNS      *FakeDNS
 	runID        string
 	publicKey    [32]byte
+	expressUp    streamCipher
+	expressDown  streamCipher
 	streamMutex  sync.Mutex
 	nextStreamID uint32
 }
@@ -44,6 +47,10 @@ func NewClient(own MailboxConfig, node NodeInfo) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	expressUp, expressDown, err := newExpressCiphers(&privateKey, node.PublicKey[:], runID)
+	if err != nil {
+		return nil, err
+	}
 	registryConfig := own
 	registryConfig.DeploymentID, registryConfig.AuthKey = node.DeploymentID, node.AuthKey
 
@@ -54,6 +61,8 @@ func NewClient(own MailboxConfig, node NodeInfo) (*Client, error) {
 		own:          own,
 		runID:        runID,
 		publicKey:    publicKey,
+		expressUp:    expressUp,
+		expressDown:  expressDown,
 		nextStreamID: 1,
 	}
 	client.Endpoint = newEndpoint(client.mailbox, runID, "up", "down", client.onFrame, up, down,
@@ -76,7 +85,7 @@ func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) bool
 	var failingSince time.Time
 	for ctx.Err() == nil {
 		attempt := time.Now()
-		known, err := c.register(ctx, accepted)
+		known, express, err := c.register(ctx, accepted)
 		if err != nil {
 			if ctx.Err() != nil {
 				return false
@@ -96,6 +105,10 @@ func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) bool
 		if !accepted {
 			accepted = true
 			log.Printf("client: node accepted run %s", c.runID)
+			if express {
+				c.startExpress(ctx, c.runID, "up", "down", c.expressUp, c.expressDown, smallBatchBytes)
+				log.Printf("client: express lane open")
+			}
 			onStatus(StatusConnected)
 		} else if !known {
 			log.Printf("client: node lost run %s, reconnecting", c.runID)
@@ -117,29 +130,32 @@ func (c *Client) keepRegistered(ctx context.Context, onStatus func(Status)) bool
 	return false
 }
 
-func (c *Client) register(ctx context.Context, refresh bool) (bool, error) {
+// The node's answer is "new", "known" or "lost", followed by " x" when it has opened the express lane.
+func (c *Client) register(ctx context.Context, refresh bool) (known, express bool, err error) {
 	sealed, err := sealRegistration(registration{
 		DeploymentID: c.own.DeploymentID,
 		AuthKey:      c.own.AuthKey,
 		RunID:        c.runID,
 		ClientKey:    c.publicKey[:],
 		Refresh:      refresh,
+		Express:      true,
 	}, &c.node.PublicKey)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	slot := fmt.Sprintf("register:%d", randomInt(registrationSlots))
 	if _, err := c.registry.Put(ctx, slot, sealed, ""); err != nil {
-		return false, err
+		return false, false, err
 	}
 	ack, err := c.mailbox.Take(ctx, c.runID+":ack")
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if ack == nil {
-		return false, errors.New("node did not answer")
+		return false, false, errors.New("node did not answer")
 	}
-	return string(ack) == "known", nil
+	state, lane, _ := strings.Cut(string(ack), " ")
+	return state == "known", lane == "x", nil
 }
 
 // handle serves one local connection, speaking SOCKS5 or HTTP proxy depending on its first byte.
@@ -173,9 +189,9 @@ func (c *Client) handle(conn net.Conn) {
 	c.nextStreamID++
 	c.streamMutex.Unlock()
 	box := c.openStream(streamID)
-	c.sender.Send(streamID, frameOpen, []byte(target))
+	c.send(streamID, frameOpen, []byte(target))
 	if len(initial) > 0 {
-		c.sender.Send(streamID, frameData, initial)
+		c.send(streamID, frameData, initial)
 	}
 	c.pump(streamID, buffered, box)
 }
