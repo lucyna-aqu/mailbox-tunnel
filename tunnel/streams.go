@@ -78,8 +78,7 @@ func (b *inbox) pop() ([]byte, bool) {
 const (
 	expressBytes        = 256_000
 	expressWindowBytes  = 1_000_000
-	expressStatusEvery  = 500 * time.Millisecond
-	expressParallelism  = 1
+	expressStatusEvery  = time.Second
 	expressReceiveAhead = 1
 	bulkLane            = -1
 )
@@ -121,7 +120,10 @@ func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func
 // startExpress opens the express lane under the key prefixes <base>:<outgoing>x and <base>:<incoming>x.
 // Streams that started before it stay on the bulk lane.
 func (e *Endpoint) startExpress(ctx context.Context, base, outgoing, incoming string, sendCipher, receiveCipher streamCipher, maxBatch int) {
-	express := NewSender(e.mailbox, base+":"+outgoing+"x", sendCipher, maxBatch, expressParallelism, expressWindowBytes)
+	// The lane adds no calls to the mailbox: Google runs at most 30 at once per account, and the bulk lane already uses most of them.
+	// Its puts share the bulk lane's slots, and its long poll takes one of the bulk receiver's.
+	express := NewSender(e.mailbox, base+":"+outgoing+"x", sendCipher, maxBatch, 1, expressWindowBytes)
+	express.slots = e.sender.slots
 	express.sealedIn = map[uint32]int{}
 	express.statusEvery = expressStatusEvery
 	express.onProgress = e.sender.wakeUp
@@ -130,6 +132,7 @@ func (e *Endpoint) startExpress(ctx context.Context, base, outgoing, incoming st
 	e.sender.mutex.Lock()
 	e.sender.hold = func(streamID uint32) bool { return !express.Finished(streamID) }
 	e.sender.mutex.Unlock()
+	e.receiver.lent.Add(expressReceiveAhead)
 	e.mutex.Lock()
 	e.express, e.expressReceiver = express, receiver
 	e.mutex.Unlock()

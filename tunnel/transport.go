@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -464,6 +465,7 @@ type Receiver struct {
 	onBytes func([]byte)
 	cipher  streamCipher
 	window  int
+	lent    atomic.Int32 // long polls handed to the express lane
 
 	mutex     sync.Mutex
 	acked     []string
@@ -478,7 +480,7 @@ func (r *Receiver) Run(ctx context.Context) {
 	pending := map[int]chan []byte{}
 	nextToDeliver, nextToRequest := 0, 0
 	for {
-		for nextToRequest < nextToDeliver+r.window {
+		for nextToRequest < nextToDeliver+r.window-int(r.lent.Load()) {
 			result := make(chan []byte, 1)
 			pending[nextToRequest] = result
 			go r.fetch(ctx, nextToRequest, result)
