@@ -123,6 +123,7 @@ function render(state) {
 }
 
 const relaySteps = {
+  connecting: "در حال اتصال به GitHub…",
   code: "منتظر ورود شما در GitHub…",
   secrets: "ذخیرهٔ کلیدهای رله در حساب شما…",
   create: "ساختن کداسپیس…",
@@ -239,6 +240,10 @@ $("show-setup-code").addEventListener("click", async () => {
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
 $("relay-setup").addEventListener("click", async () => {
+  // Hide the button at once; the backend's own state takes over when it answers.
+  $("relay-setup").hidden = true;
+  $("relay-progress").hidden = false;
+  $("relay-step").textContent = relaySteps.connecting;
   showMessage("backup-message", "");
   const error = await backend().SetUpRelay();
   if (error) showMessage("backup-message", error, true);

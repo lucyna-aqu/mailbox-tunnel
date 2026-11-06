@@ -39,22 +39,27 @@ func (a *App) SetUpRelay() string {
 	if relayRepo == "" || githubClientID == "" {
 		return "This build cannot set up a GitHub relay."
 	}
+	// The setup counts as running before GitHub is asked for a code, which can take seconds from Iran, so more clicks start nothing.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	a.mutex.Lock()
-	busy := a.relayCancel != nil
-	a.mutex.Unlock()
-	if busy {
+	if a.relayCancel != nil {
+		a.mutex.Unlock()
+		cancel()
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	login, err := tunnel.StartDeviceLogin(ctx, githubClientID)
-	if err != nil {
-		cancel()
-		log.Printf("relay sign-in: %v", err)
-		return "Could not reach GitHub to sign in."
-	}
-	a.mutex.Lock()
 	a.relayCancel = cancel
 	a.mutex.Unlock()
+	a.setRelay(RelaySetup{Step: "connecting"})
+	login, err := tunnel.StartDeviceLogin(ctx, githubClientID)
+	if err != nil {
+		a.mutex.Lock()
+		a.relayCancel = nil
+		a.mutex.Unlock()
+		cancel()
+		log.Printf("relay sign-in: %v", err)
+		a.setRelay(RelaySetup{})
+		return "Could not reach GitHub to sign in."
+	}
 	a.setRelay(RelaySetup{Step: "code", Code: login.UserCode, URL: login.VerificationURI})
 	runtime.BrowserOpenURL(a.ctx, login.VerificationURI)
 	go a.finishRelaySetup(ctx, login)
