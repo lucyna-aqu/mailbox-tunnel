@@ -4,8 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:icon="@android:drawable/sym_def_app_icon"
-        android:label="mailbox-tunnel"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Mailbox Tunnel"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
