@@ -24,7 +24,7 @@ const (
 
 	// The window is how much is sealed ahead of the receiver: enough to keep the line busy, small enough to drain fast after a closed stream.
 	// Google's calls take seconds, so its window stays large; a relay answers at once.
-	googleWindowBytes = 4_500_000
+	googleWindowBytes = 1_500_000
 	relayWindowBytes  = 768_000
 	uploadWindowBytes = 512_000
 
