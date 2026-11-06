@@ -40,6 +40,10 @@ type State struct {
 	Version     string         `json:"version"`
 	Update      *tunnel.Update `json:"update"`      // a newer release, or nil
 	UpdateKnown bool           `json:"updateKnown"` // whether a check has succeeded
+	// The GitHub relay: whether this build can set one up, whether the saved one was set up here, and a setup in progress.
+	RelayAvailable bool       `json:"relayAvailable"`
+	RelayManaged   bool       `json:"relayManaged"`
+	Relay          RelaySetup `json:"relay"`
 }
 
 // Traffic is the total relayed for local applications, plus the current round trip to Google.
@@ -63,15 +67,17 @@ type App struct {
 	ctx          context.Context
 	settingsPath string
 
-	mutex   sync.Mutex
-	state   State
-	cancel  context.CancelFunc
-	stopped chan struct{}
-	logs    []string
+	mutex         sync.Mutex
+	state         State
+	cancel        context.CancelFunc
+	stopped       chan struct{}
+	logs          []string
+	relayCancel   context.CancelFunc // set while a relay setup runs
+	settingsMutex sync.Mutex         // serializes read-change-save of the settings file
 }
 
 func NewApp() *App {
-	return &App{state: State{Status: statusDisconnected, Version: tunnel.Version}}
+	return &App{state: State{Status: statusDisconnected, Version: tunnel.Version, RelayAvailable: relayRepo != "" && githubClientID != ""}}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -103,6 +109,7 @@ func (a *App) startup(ctx context.Context) {
 	a.state.EnvProxy = settings.SetEnvProxy
 	a.state.Backup = settings.Backup != ""
 	a.state.PreferRelay = settings.PreferRelay
+	a.state.RelayManaged = settings.RelaySpace != ""
 	if a.state.Configured {
 		route := settings.Route()
 		a.state.Route = route.FrontDomain + " via " + route.GoogleIP
@@ -369,6 +376,19 @@ func (a *App) Connect() string {
 		// Trusting a relay that was off used to leave the client with nothing but a stale Google route that no scan ever replaced.
 		backup, hasBackup := settings.BackupRoute()
 		relayUp := hasBackup && relayAnswers(ctx, backup)
+		// A relay this app set up sleeps after a few idle hours, and waking it spends the user's codespace hours.
+		// So it is woken only when needed: before connecting when preferred, when Google has no route, or when the client moves to it.
+		canWake := hasBackup && settings.RelaySpace != ""
+		wake := func() bool {
+			if err := wakeRelay(ctx, settings); err != nil {
+				log.Printf("relay wake: %v", err)
+				return false
+			}
+			return relayAnswers(ctx, backup)
+		}
+		if canWake && !relayUp && settings.PreferRelay {
+			relayUp = wake()
+		}
 		var googleWorks bool
 		if !scansGoogle(relayUp, settings.PreferRelay) {
 			// The relay goes first, so a failing Google route is only noted; the next connect without the relay scans for a new one.
@@ -377,6 +397,9 @@ func (a *App) Connect() string {
 			}
 		} else {
 			googleWorks = tunnel.EnsureRoute(ctx, a.settingsPath, &settings, a.scanProgress)
+		}
+		if canWake && !googleWorks && !relayUp {
+			relayUp = wake()
 		}
 		if !googleWorks && !relayUp {
 			if ctx.Err() == nil {
@@ -405,7 +428,16 @@ func (a *App) Connect() string {
 			Routes:   routes,
 			Listener: listener,
 			OnStatus: a.setStatus,
-			OnRoute:  func(name string) { a.showRoute(name, googleRoute) },
+			OnRoute: func(name string) {
+				a.showRoute(name, googleRoute)
+				if name == "Relay" && canWake {
+					go func() {
+						if !relayAnswers(ctx, backup) {
+							wake()
+						}
+					}()
+				}
+			},
 		})
 		if saved, err := tunnel.LoadSettings(a.settingsPath); err == nil {
 			tunnel.RestoreLeftoverProxy(a.settingsPath, &saved)

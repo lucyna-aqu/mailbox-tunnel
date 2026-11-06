@@ -117,9 +117,26 @@
             <h2>رلهٔ گیتهاب</h2>
             <span id="backup-current" class="badge" dir="ltr">Not set up</span>
           </div>
-          <p class="note">مسیر پشتیبان و سریع‌تر، از حساب GitHub خودتان. وقتی گوگل کار نکند، برنامه خودش سراغ رله می‌رود.</p>
-          <input id="backup-input" dir="ltr" placeholder="mtn://… (empty to remove)" autocomplete="off" spellcheck="false">
-          <button id="save-backup" class="secondary" type="button">ذخیرهٔ رله</button>
+          <p class="note">مسیر پشتیبان و سریع‌تر، در حساب GitHub خودتان. ماهی ۶۰ ساعت رایگان است و فقط وقتی لازم باشد روشن می‌شود.</p>
+          <button id="relay-setup" class="secondary" type="button">راه‌اندازی با حساب GitHub</button>
+          <div id="relay-progress" class="relay-progress" hidden>
+            <div id="relay-code-row" hidden>
+              <p class="note">این کد را در صفحهٔ GitHub که باز شد وارد کنید:</p>
+              <div class="code-row">
+                <div id="relay-code" class="code-box" dir="ltr"></div>
+                <button id="relay-copy" class="secondary" type="button">کپی</button>
+              </div>
+              <p class="note small">صفحه باز نشد؟ <span id="relay-url" dir="ltr"></span></p>
+            </div>
+            <p id="relay-step" class="note"></p>
+            <button id="relay-cancel" class="text-button" type="button">انصراف</button>
+          </div>
+          <button id="relay-remove" class="text-button" type="button" hidden>حذف رله</button>
+          <details id="relay-manual" class="manual">
+            <summary>وارد کردن دستی رشتهٔ رله</summary>
+            <input id="backup-input" dir="ltr" placeholder="mtn://… (empty to remove)" autocomplete="off" spellcheck="false">
+            <button id="save-backup" class="secondary" type="button">ذخیرهٔ رله</button>
+          </details>
           <p id="backup-message" class="message" hidden></p>
         </section>
 

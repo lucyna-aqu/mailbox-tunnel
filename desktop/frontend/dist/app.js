@@ -18,6 +18,11 @@ const persian = {
   "This mailbox already belongs to another device. Paste the setup code from that device instead.": "این صندوق مال دستگاه دیگری است. به‌جای آدرس، کد راه‌اندازی آن دستگاه را بچسبانید.",
   "This mailbox runs an older Code.gs. Deploy the latest Code.gs and try again.": "این صندوق Code.gs قدیمی دارد. آخرین Code.gs را دیپلوی کنید و دوباره امتحان کنید.",
   "Could not create a key on this device.": "ساختن کلید روی این دستگاه ممکن نشد.",
+  "This build cannot set up a GitHub relay.": "این نسخهٔ برنامه نمی‌تواند رلهٔ گیتهاب بسازد.",
+  "Could not reach GitHub to sign in.": "برای ورود به GitHub دسترسی نشد. اتصال اینترنت را بررسی کنید.",
+  "Sign-in was refused on GitHub.": "ورود در GitHub رد شد.",
+  "The code was not entered in time. Try again.": "کد به‌موقع وارد نشد. دوباره امتحان کنید.",
+  "The relay could not be set up. See Logs for the reason.": "ساختن رله ممکن نشد. دلیلش در گزارش‌ها هست.",
 };
 
 function translate(message) {
@@ -102,6 +107,7 @@ function render(state) {
     : state.status === "disconnected"
       ? "اگر مسیر اول کار نکند، برنامه خودش به مسیر دوم می‌رود."
       : "از اتصال بعدی اعمال می‌شود. اگر مسیر اول کار نکند، برنامه خودش به مسیر دوم می‌رود.";
+  renderRelay(state);
   $("auto-connect").checked = state.autoConnect;
   $("env-proxy").checked = state.envProxy;
   $("update-banner").hidden = !state.update;
@@ -114,6 +120,29 @@ function render(state) {
   else if (state.updateKnown) version += " · آخرین نسخه را دارید";
   $("app-version").textContent = version;
   showError(state.error);
+}
+
+const relaySteps = {
+  code: "منتظر ورود شما در GitHub…",
+  secrets: "ذخیرهٔ کلیدهای رله در حساب شما…",
+  create: "ساختن کداسپیس…",
+  start: "روشن شدن کداسپیس…",
+  port: "باز کردن درگاه رله…",
+  relay: "منتظر جواب رله…",
+};
+
+function renderRelay(state) {
+  const relay = state.relay || {};
+  const busy = !!relaySteps[relay.step];
+  $("relay-setup").hidden = !state.relayAvailable || busy || !!state.relayManaged;
+  $("relay-remove").hidden = busy || !state.relayManaged;
+  $("relay-progress").hidden = !busy;
+  $("relay-code-row").hidden = relay.step !== "code";
+  $("relay-code").textContent = relay.code || "";
+  $("relay-url").textContent = relay.url || "";
+  $("relay-step").textContent = relaySteps[relay.step] || "";
+  if (relay.error) showMessage("backup-message", relay.error, true);
+  else if (relay.step === "done") showMessage("backup-message", "رله آماده است و به‌عنوان مسیر پشتیبان ذخیره شد.");
 }
 
 function showError(message) {
@@ -209,6 +238,20 @@ $("show-setup-code").addEventListener("click", async () => {
 });
 
 $("reset").addEventListener("click", () => backend().ResetSettings());
+$("relay-setup").addEventListener("click", async () => {
+  showMessage("backup-message", "");
+  const error = await backend().SetUpRelay();
+  if (error) showMessage("backup-message", error, true);
+});
+$("relay-cancel").addEventListener("click", () => backend().CancelRelaySetup());
+$("relay-remove").addEventListener("click", async () => {
+  showMessage("backup-message", "در حال حذف رله…");
+  const error = await backend().RemoveRelay();
+  showMessage("backup-message", error || "رله حذف شد.", !!error);
+});
+$("relay-copy").addEventListener("click", () => {
+  navigator.clipboard.writeText($("relay-code").textContent).catch(() => {});
+});
 $("open-update").addEventListener("click", () => backend().OpenUpdate());
 $("prefer-google").addEventListener("click", () => backend().SetPreferRelay(false));
 $("prefer-relay").addEventListener("click", () => backend().SetPreferRelay(true));

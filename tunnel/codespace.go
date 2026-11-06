@@ -133,6 +133,11 @@ func (r *CodespaceRelay) Start(ctx context.Context, progress func(step string)) 
 	return r.waitForRelay(ctx)
 }
 
+// Delete removes the codespace from the user's account.
+func (r *CodespaceRelay) Delete(ctx context.Context) error {
+	return r.call(ctx, http.MethodDelete, "/user/codespaces/"+url.PathEscape(r.Name), nil, nil)
+}
+
 // host is the relay's public host name.
 func (r *CodespaceRelay) host() string {
 	return fmt.Sprintf("%s-%d.app.github.dev", r.Name, relayPort)

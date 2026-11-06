@@ -49,6 +49,8 @@ type Settings struct {
 	Node          string             `json:"node"`
 	Backup        string             `json:"backup,omitempty"` // a relay's node string, used while the main route does not work
 	PreferRelay   bool               `json:"prefer_relay,omitempty"`
+	GitHubToken   string             `json:"github_token,omitempty"`    // the user's token for their relay codespace
+	RelaySpace    string             `json:"relay_codespace,omitempty"` // the relay codespace's name, to wake it
 	GoogleIP      string             `json:"google_ip,omitempty"`
 	FrontDomain   string             `json:"front_domain,omitempty"`
 	AutoConnect   bool               `json:"auto_connect,omitempty"`

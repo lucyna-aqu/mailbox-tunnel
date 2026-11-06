@@ -450,6 +450,47 @@ input:focus {
   cursor: default;
 }
 
+.relay-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.code-row {
+  display: flex;
+  gap: 10px;
+}
+
+.code-box {
+  flex: 1;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--accent-fill);
+  border-radius: 12px;
+  background: var(--field);
+  font: 700 22px Consolas, ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  user-select: text;
+}
+
+.code-row .secondary {
+  height: 52px;
+  padding: 0 18px;
+}
+
+.manual summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.manual[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .secondary {
   height: 44px;
   border: 1.5px solid var(--border);
