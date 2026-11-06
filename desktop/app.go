@@ -300,6 +300,35 @@ func (a *App) SaveBackup(nodeString string) string {
 	return ""
 }
 
+// scansGoogle reports whether connecting checks Google's route and scans for a new one when it fails.
+// Only a relay that answered and is preferred spares the wait, since the client starts on it.
+func scansGoogle(relayUp, preferRelay bool) bool {
+	return !(relayUp && preferRelay)
+}
+
+// routeOrder lists the routes the client tries in turn.
+// The relay goes first when it answered and is preferred or Google has no working route; a relay that did not answer still comes last, since it may be started later.
+func routeOrder(google, relay tunnel.ClientRoute, hasRelay, relayUp, preferRelay, googleWorks bool) []tunnel.ClientRoute {
+	if !hasRelay {
+		return []tunnel.ClientRoute{google}
+	}
+	if relayUp && (preferRelay || !googleWorks) {
+		return []tunnel.ClientRoute{relay, google}
+	}
+	return []tunnel.ClientRoute{google, relay}
+}
+
+// relayAnswers pings the relay's mailbox, giving it a few seconds since a codespace may be waking up.
+func relayAnswers(ctx context.Context, relay tunnel.ClientRoute) bool {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err := tunnel.NewMailbox(relay.Own).Ping(ctx)
+	if err != nil {
+		log.Printf("relay check: %v", err)
+	}
+	return err == nil
+}
+
 // Connect starts the tunnel and points the system proxy at it. It returns an error message or "".
 func (a *App) Connect() string {
 	a.mutex.Lock()
@@ -336,32 +365,28 @@ func (a *App) Connect() string {
 			a.publish()
 		}()
 
+		// The relay counts only when it answers now, and Google's route is scanned for whenever the saved one fails.
+		// Trusting a relay that was off used to leave the client with nothing but a stale Google route that no scan ever replaced.
 		backup, hasBackup := settings.BackupRoute()
-		preferRelay := hasBackup && settings.PreferRelay
+		relayUp := hasBackup && relayAnswers(ctx, backup)
 		var googleWorks bool
-		if preferRelay {
-			// The relay goes first, so Google is only checked when the client falls back to it.
-			googleWorks = true
-		} else if hasBackup {
-			// With a backup there is no need to wait for a scan: the client starts on the relay and Google stays next in line.
-			_, googleWorks = tunnel.TestRoute(ctx, settings.OwnMailbox(), settings.Route())
+		if !scansGoogle(relayUp, settings.PreferRelay) {
+			// The relay goes first, so a failing Google route is only noted; the next connect without the relay scans for a new one.
+			if _, googleWorks = tunnel.TestRoute(ctx, settings.OwnMailbox(), settings.Route()); !googleWorks {
+				log.Printf("route %s via %s does not work here; Google stays next in line until a later scan", settings.Route().FrontDomain, settings.Route().GoogleIP)
+			}
 		} else {
 			googleWorks = tunnel.EnsureRoute(ctx, a.settingsPath, &settings, a.scanProgress)
 		}
-		if !googleWorks && !hasBackup {
+		if !googleWorks && !relayUp {
 			if ctx.Err() == nil {
 				a.setError("No working route to Google was found on this network.")
 			}
 			return
 		}
 		googleRoute := settings.Route()
-		routes := []tunnel.ClientRoute{{Name: "Google", Own: settings.OwnMailbox(), Node: node}}
-		if hasBackup {
-			routes = append(routes, backup)
-			if preferRelay || !googleWorks {
-				routes[0], routes[1] = routes[1], routes[0]
-			}
-		}
+		google := tunnel.ClientRoute{Name: "Google", Own: settings.OwnMailbox(), Node: node}
+		routes := routeOrder(google, backup, hasBackup, relayUp, settings.PreferRelay, googleWorks)
 
 		listener, err := net.Listen("tcp", "127.0.0.1:1080")
 		if err != nil {
