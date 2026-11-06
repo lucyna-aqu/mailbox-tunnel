@@ -37,21 +37,27 @@ type CodespaceRelay struct {
 	Token string // the user's token, with the codespace scope
 	Repo  string // the public repository with the relay's dev container, as "owner/name"
 	Name  string // the codespace's name once it exists
+	// Announce tells the codespace's tunnel host about the new port, which it does not notice on its own.
+	// GitHub's command line does it by connecting to the tunnel; the desktop app sets it, so other builds stay free of that library.
+	Announce func(context.Context, TunnelDetails) error
 }
 
 type codespaceInfo struct {
 	Name       string `json:"name"`
 	State      string `json:"state"`
 	Connection struct {
-		TunnelProperties tunnelProperties `json:"tunnelProperties"`
+		TunnelProperties TunnelDetails `json:"tunnelProperties"`
 	} `json:"connection"`
 }
 
-type tunnelProperties struct {
+// TunnelDetails are what GitHub tells about a codespace's port tunnel.
+type TunnelDetails struct {
+	ConnectAccessToken     string `json:"connectAccessToken"`
 	ManagePortsAccessToken string `json:"managePortsAccessToken"`
 	ServiceURI             string `json:"serviceUri"`
 	TunnelID               string `json:"tunnelId"`
 	ClusterID              string `json:"clusterId"`
+	Domain                 string `json:"domain"`
 }
 
 // SetUp creates the relay codespace with fresh keys, makes its port public and returns the relay's node string.
@@ -117,6 +123,11 @@ func (r *CodespaceRelay) Start(ctx context.Context, progress func(step string)) 
 	progress("port")
 	if err := publishPort(ctx, info.Connection.TunnelProperties, relayPort); err != nil {
 		return fmt.Errorf("making the relay's port public: %w", err)
+	}
+	if r.Announce != nil {
+		if err := r.Announce(ctx, info.Connection.TunnelProperties); err != nil {
+			return fmt.Errorf("telling the codespace about the port: %w", err)
+		}
 	}
 	progress("relay")
 	return r.waitForRelay(ctx)
@@ -240,7 +251,7 @@ func (r *CodespaceRelay) call(ctx context.Context, method, path string, body, re
 
 // publishPort creates the port in the codespace's tunnel with anonymous access, which is what a public port is.
 // A port that exists already is replaced, the way GitHub's own command line changes a port's visibility.
-func publishPort(ctx context.Context, properties tunnelProperties, port int) error {
+func publishPort(ctx context.Context, properties TunnelDetails, port int) error {
 	portURL, err := tunnelPortURL(properties, port)
 	if err != nil {
 		return err
@@ -290,7 +301,7 @@ func publishPort(ctx context.Context, properties tunnelProperties, port int) err
 }
 
 // tunnelPortURL is the tunnel service's address for one port: the cluster is a subdomain of the service.
-func tunnelPortURL(properties tunnelProperties, port int) (string, error) {
+func tunnelPortURL(properties TunnelDetails, port int) (string, error) {
 	service, err := url.Parse(properties.ServiceURI)
 	if err != nil || service.Host == "" || properties.TunnelID == "" || properties.ClusterID == "" {
 		return "", errors.New("incomplete tunnel details")

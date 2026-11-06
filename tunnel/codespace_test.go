@@ -33,12 +33,12 @@ func TestTunnelPortURL(t *testing.T) {
 		"https://rel.tunnels.api.visualstudio.com":         "https://usw2.rel.tunnels.api.visualstudio.com/tunnels/abc/ports/8080?api-version=" + tunnelsAPIVersion,
 		"https://usw2.rel.tunnels.api.visualstudio.com/":   "https://usw2.rel.tunnels.api.visualstudio.com/tunnels/abc/ports/8080?api-version=" + tunnelsAPIVersion,
 	} {
-		got, err := tunnelPortURL(tunnelProperties{ServiceURI: service, TunnelID: "abc", ClusterID: "usw2"}, 8080)
+		got, err := tunnelPortURL(TunnelDetails{ServiceURI: service, TunnelID: "abc", ClusterID: "usw2"}, 8080)
 		if err != nil || got != want {
 			t.Errorf("%s: got %s, %v", service, got, err)
 		}
 	}
-	if _, err := tunnelPortURL(tunnelProperties{ServiceURI: "https://rel.tunnels.api.visualstudio.com"}, 8080); err == nil {
+	if _, err := tunnelPortURL(TunnelDetails{ServiceURI: "https://rel.tunnels.api.visualstudio.com"}, 8080); err == nil {
 		t.Error("missing tunnel details were accepted")
 	}
 }
