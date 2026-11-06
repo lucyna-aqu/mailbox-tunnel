@@ -29,6 +29,9 @@ const (
 	codespaceReadyTimeout = 10 * time.Minute
 )
 
+// ErrCodespacesRefused means GitHub would not create a codespace for this account; it does this to new accounts, answering with a "too many requests" page.
+var ErrCodespacesRefused = errors.New("GitHub refused to create a codespace for this account")
+
 // githubAPI is GitHub's API root; tests point it at a local server.
 var githubAPI = "https://api.github.com"
 
@@ -99,6 +102,9 @@ func (r *CodespaceRelay) SetUp(ctx context.Context, progress func(step string)) 
 		"display_name":         "Mailbox Tunnel relay",
 	}
 	if err := r.call(ctx, http.MethodPost, "/user/codespaces", request, &created); err != nil {
+		if strings.HasPrefix(err.Error(), "HTTP 429") || strings.HasPrefix(err.Error(), "HTTP 403") {
+			return "", fmt.Errorf("%w (%v)", ErrCodespacesRefused, err)
+		}
 		return "", fmt.Errorf("creating the codespace: %w", err)
 	}
 	r.Name = created.Name

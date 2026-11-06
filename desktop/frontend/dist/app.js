@@ -23,6 +23,7 @@ const persian = {
   "Sign-in was refused on GitHub.": "ورود در GitHub رد شد.",
   "The code was not entered in time. Try again.": "کد به‌موقع وارد نشد. دوباره امتحان کنید.",
   "The relay could not be set up. See Logs for the reason.": "ساختن رله ممکن نشد. دلیلش در گزارش‌ها هست.",
+  "GitHub does not let this account create codespaces yet. Sign in with an older account, or try again in a few days.": "GitHub هنوز به این حساب اجازهٔ ساختن کداسپیس نمی‌دهد؛ این محدودیت برای حساب‌های تازه است. با یک حساب قدیمی‌تر وارد شوید، یا چند روز دیگر دوباره امتحان کنید.",
 };
 
 function translate(message) {

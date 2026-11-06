@@ -93,6 +93,8 @@ func (a *App) finishRelaySetup(ctx context.Context, login tunnel.DeviceLogin) {
 			message = "Sign-in was refused on GitHub."
 		case errors.Is(err, tunnel.ErrLoginExpired):
 			message = "The code was not entered in time. Try again."
+		case errors.Is(err, tunnel.ErrCodespacesRefused):
+			message = "GitHub does not let this account create codespaces yet. Sign in with an older account, or try again in a few days."
 		}
 		a.setRelay(RelaySetup{Error: message})
 	}
