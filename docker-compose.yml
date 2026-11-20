@@ -1,0 +1,24 @@
+services:
+  node:
+    build: .
+    image: mailbox-tunnel:latest
+    container_name: mailbox-tunnel-node
+    restart: unless-stopped
+    environment:
+      MAILBOX_DEPLOYMENT_ID: ${MAILBOX_DEPLOYMENT_ID:-}
+      MAILBOX_AUTH_KEY: ${MAILBOX_AUTH_KEY:-}
+      MAILBOX_NODE_KEY: ${MAILBOX_NODE_KEY:-}
+      STATUS_LISTEN: ${STATUS_LISTEN:-:7860}
+    ports:
+      - "${STATUS_BIND:-127.0.0.1}:${STATUS_PORT:-7860}:7860"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  keygen:
+    build: .
+    image: mailbox-tunnel:latest
+    profiles: ["tools"]
+    entrypoint: ["/mailbox-tunnel", "-mode", "keygen"]
