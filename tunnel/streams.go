@@ -2,14 +2,28 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
-const readChunkBytes = 32 * 1024
+const (
+	readChunkBytes = 32 * 1024
+	maxInboxBytes  = 8 << 20
+	maxNodeStreams = 256
+)
+
+var (
+	errBlockedAddress = errors.New("refused connection to private or local address")
+	cgnatPrefix       = netip.MustParsePrefix("100.64.0.0/10")
+	benchmarkPrefix   = netip.MustParsePrefix("198.18.0.0/15")
+	ipv4Broadcast     = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+)
 
 // bytesFromApps and bytesToApps count the traffic relayed for local connections.
 var bytesFromApps, bytesToApps atomic.Int64
@@ -19,10 +33,17 @@ func TrafficTotals() (sent, received int64) {
 	return bytesFromApps.Load(), bytesToApps.Load()
 }
 
-// inbox is an unbounded per-stream queue, so a slow connection cannot stall the others.
+// ResetTrafficTotals zeroes the relayed traffic counters for a new client connection.
+func ResetTrafficTotals() {
+	bytesFromApps.Store(0)
+	bytesToApps.Store(0)
+}
+
+// inbox is a bounded per-stream queue, so a slow connection cannot stall the others or exhaust memory.
 type inbox struct {
 	mutex  sync.Mutex
 	items  [][]byte
+	bytes  int
 	closed bool
 	notify chan struct{}
 }
@@ -34,7 +55,15 @@ func newInbox() *inbox {
 func (b *inbox) push(data []byte) {
 	b.mutex.Lock()
 	if !b.closed {
-		b.items = append(b.items, data)
+		if b.bytes+len(data) > maxInboxBytes {
+			// A stalled stream that never drains is closed rather than allowed to grow without bound.
+			b.closed = true
+			b.items = nil
+			b.bytes = 0
+		} else {
+			b.items = append(b.items, data)
+			b.bytes += len(data)
+		}
 	}
 	b.mutex.Unlock()
 	b.signal()
@@ -60,7 +89,9 @@ func (b *inbox) pop() ([]byte, bool) {
 		b.mutex.Lock()
 		if len(b.items) > 0 {
 			data := b.items[0]
+			b.items[0] = nil
 			b.items = b.items[1:]
+			b.bytes -= len(data)
 			b.mutex.Unlock()
 			return data, true
 		}
@@ -75,10 +106,13 @@ func (b *inbox) pop() ([]byte, bool) {
 
 // Endpoint is the state shared by both tunnel ends.
 type Endpoint struct {
-	sender   *Sender
-	receiver *Receiver
-	mutex    sync.Mutex
-	inboxes  map[uint32]*inbox
+	sender       *Sender
+	receiver     *Receiver
+	countTraffic bool
+	done         chan struct{}
+	ctx          context.Context
+	mutex        sync.Mutex
+	inboxes      map[uint32]*inbox
 }
 
 // endpointShape sets the largest outgoing batch, how much is sealed ahead, and how many calls run in parallel each way.
@@ -95,12 +129,15 @@ func newEndpoint(mailbox *Mailbox, base, outgoing, incoming string, onFrame func
 	return &Endpoint{
 		sender:   NewSender(mailbox, base+":"+outgoing, sendCipher, shape.maxBatch, shape.sendParallelism, shape.window),
 		receiver: &Receiver{mailbox: mailbox, prefix: base + ":" + incoming, onBytes: parser.feed, cipher: receiveCipher, window: shape.receiveWindow},
+		done:     make(chan struct{}),
 		inboxes:  map[uint32]*inbox{},
 	}
 }
 
 // run moves batches until ctx ends, then closes every open stream.
 func (e *Endpoint) run(ctx context.Context) {
+	e.ctx = ctx
+	defer close(e.done)
 	go e.sender.Run(ctx)
 	e.receiver.Run(ctx)
 	e.mutex.Lock()
@@ -116,6 +153,17 @@ func (e *Endpoint) openStream(streamID uint32) *inbox {
 	e.inboxes[streamID] = box
 	e.mutex.Unlock()
 	return box
+}
+
+func (e *Endpoint) tryOpenStream(streamID uint32, limit int) (*inbox, bool) {
+	box := newInbox()
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	if limit > 0 && len(e.inboxes) >= limit {
+		return nil, false
+	}
+	e.inboxes[streamID] = box
+	return box, true
 }
 
 func (e *Endpoint) forget(streamID uint32) {
@@ -147,6 +195,7 @@ func (e *Endpoint) deliver(streamID uint32, frameType byte, payload []byte) {
 // pump relays one connection both ways until either side closes.
 func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 	done := make(chan struct{}, 2)
+	streamDone := make(chan struct{})
 	go func() {
 		buffer := make([]byte, readChunkBytes)
 		for {
@@ -154,18 +203,24 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 			if n > 0 {
 				stalledAt := time.Now()
 				for e.sender.Backlog() > e.sender.MaxBacklog() {
-					time.Sleep(50 * time.Millisecond)
+					select {
+					case <-e.done:
+						goto readExit
+					case <-streamDone:
+						goto readExit
+					case <-time.After(50 * time.Millisecond):
+					}
 				}
 				if Trace && time.Since(stalledAt) > 50*time.Millisecond {
 					log.Printf("trace backlog full for %dms", time.Since(stalledAt).Milliseconds())
 				}
 				e.sender.Send(streamID, frameData, buffer[:n])
-				bytesFromApps.Add(int64(n))
 			}
 			if err != nil {
 				break
 			}
 		}
+	readExit:
 		e.sender.Send(streamID, frameClose, nil)
 		done <- struct{}{}
 	}()
@@ -175,22 +230,44 @@ func (e *Endpoint) pump(streamID uint32, conn net.Conn, box *inbox) {
 			if !ok {
 				break
 			}
-			if _, err := conn.Write(data); err != nil {
+			written, err := conn.Write(data)
+			if e.countTraffic && written > 0 {
+				bytesToApps.Add(int64(written))
+			}
+			if err != nil {
 				break
 			}
-			bytesToApps.Add(int64(len(data)))
 		}
 		done <- struct{}{}
 	}()
 	<-done
+	close(streamDone)
 	conn.Close()
 	box.close()
 	e.forget(streamID)
 }
 
+// isBlockedExitIP reports whether addr points to loopback, private LAN, link-local/metadata, or other non-public ranges.
+func isBlockedExitIP(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if !addr.IsValid() {
+		return true
+	}
+	return addr.IsLoopback() ||
+		addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() ||
+		addr.IsMulticast() ||
+		addr.IsUnspecified() ||
+		cgnatPrefix.Contains(addr) ||
+		benchmarkPrefix.Contains(addr) ||
+		addr == ipv4Broadcast
+}
+
 // NodeEndpoint is the exit side of one client run: it opens real TCP connections for OPEN frames.
 type NodeEndpoint struct {
 	*Endpoint
+	allowPrivateExit bool // tests only
 }
 
 // maxBatch is the largest batch the client's mailbox can store; window is how much is sealed ahead of the client.
@@ -203,7 +280,12 @@ func NewNodeEndpoint(mailbox *Mailbox, runID string, sendCipher, receiveCipher s
 
 func (n *NodeEndpoint) onFrame(streamID uint32, frameType byte, payload []byte) {
 	if frameType == frameOpen {
-		box := n.openStream(streamID)
+		box, ok := n.tryOpenStream(streamID, maxNodeStreams)
+		if !ok {
+			log.Printf("stream %d: too many open streams (%d)", streamID, maxNodeStreams)
+			n.sender.Send(streamID, frameClose, nil)
+			return
+		}
 		go n.serve(streamID, string(payload), box)
 		return
 	}
@@ -211,7 +293,24 @@ func (n *NodeEndpoint) onFrame(streamID uint32, frameType byte, payload []byte) 
 }
 
 func (n *NodeEndpoint) serve(streamID uint32, target string, box *inbox) {
-	conn, err := net.DialTimeout("tcp", target, 15*time.Second)
+	ctx := n.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	if !n.allowPrivateExit {
+		dialer.Control = func(_, address string, _ syscall.RawConn) error {
+			addrPort, err := netip.ParseAddrPort(address)
+			if err != nil {
+				return err
+			}
+			if isBlockedExitIP(addrPort.Addr()) {
+				return errBlockedAddress
+			}
+			return nil
+		}
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
 		log.Printf("stream %d: connect failed (%v)", streamID, err)
 		n.sender.Send(streamID, frameClose, nil)

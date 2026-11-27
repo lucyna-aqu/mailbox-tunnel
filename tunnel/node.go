@@ -12,6 +12,7 @@ const (
 	registrationSlots   = 2
 	registrationRefresh = 4 * time.Minute
 	sessionIdleLimit    = 15 * time.Minute
+	maxNodeSessions     = 200
 	// A session whose client has taken nothing for this long is ended, so it stops using the user's mailbox.
 	clientGoneAfter = time.Minute
 )
@@ -88,7 +89,7 @@ func (s *NodeServer) listen(ctx, listenCtx context.Context, key string) {
 		if err != nil {
 			if listenCtx.Err() == nil {
 				log.Printf("registry %s: %v", key, err)
-				time.Sleep(2 * time.Second)
+				sleepContext(listenCtx, 2*time.Second)
 			}
 			continue
 		}
@@ -104,14 +105,28 @@ func (s *NodeServer) listen(ctx, listenCtx context.Context, key string) {
 	}
 }
 
+// validUserDeployment ensures a registered mailbox is either a valid Apps Script deployment ID
+// or, on a self-hosted relay node, the relay's own host name. This prevents SSRF via arbitrary hosts.
+func (s *NodeServer) validUserDeployment(id string) bool {
+	if deploymentID.MatchString(id) {
+		return true
+	}
+	return s.registry != nil && selfHosted(s.registry.config.DeploymentID) && id == s.registry.config.DeploymentID
+}
+
 // accept starts serving a newly registered client run, or refreshes a known one, and acks it in the client's mailbox.
 func (s *NodeServer) accept(ctx context.Context, entry registration) {
+	if !s.validUserDeployment(entry.DeploymentID) {
+		log.Printf("session %s: rejected invalid mailbox deployment", entry.RunID)
+		return
+	}
 	s.mutex.Lock()
 	session, exists := s.sessions[entry.DeploymentID]
 	known := exists && session.runID == entry.RunID
 	if known {
 		session.lastSeen = time.Now()
 	}
+	full := !exists && len(s.sessions) >= maxNodeSessions
 	s.mutex.Unlock()
 
 	// A run this node never served belongs to a node that has handed over or restarted; the client starts a fresh one.
@@ -119,6 +134,10 @@ func (s *NodeServer) accept(ctx context.Context, entry registration) {
 		if _, err := NewMailbox(s.userMailbox(entry)).Put(ctx, entry.RunID+":ack", []byte("lost"), ""); err != nil {
 			log.Printf("session %s: ack failed (%v)", entry.RunID, err)
 		}
+		return
+	}
+	if full {
+		log.Printf("session %s: rejected, node at session limit (%d)", entry.RunID, maxNodeSessions)
 		return
 	}
 	if !known {
