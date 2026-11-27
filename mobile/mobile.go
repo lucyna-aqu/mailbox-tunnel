@@ -43,6 +43,8 @@ type state struct {
 	Route       string `json:"route"`
 	AutoConnect bool   `json:"autoConnect"`
 	EnvProxy    bool   `json:"envProxy"`
+	Backup      bool   `json:"backup"`
+	PreferRelay bool   `json:"preferRelay"`
 	Error       string `json:"error"`
 	Version     string `json:"version"`
 }
@@ -97,6 +99,8 @@ func settingsPath() string {
 func applySettings(settings tunnel.Settings) {
 	controller.state.Configured = settings.DeploymentID != ""
 	controller.state.AutoConnect = settings.AutoConnect
+	controller.state.Backup = settings.Backup != ""
+	controller.state.PreferRelay = settings.PreferRelay
 	controller.state.Node = ""
 	if node, err := tunnel.ParseNodeInfo(settings.Node); err == nil {
 		controller.state.Node = fmt.Sprintf("%x", node.PublicKey[:4])
@@ -221,6 +225,8 @@ func Start(tunFd int) string {
 		return "That is not a valid node string."
 	}
 
+	tunnel.ResetTrafficTotals()
+	tunnel.ResetLatency()
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	controller.Lock()
@@ -233,11 +239,29 @@ func Start(tunFd int) string {
 		defer markStopped(stopped)
 		defer device.Close()
 
-		if !tunnel.EnsureRoute(ctx, settingsPath(), &settings, nil) {
+		backup, hasBackup := settings.BackupRoute()
+		relayUp := false
+		if hasBackup {
+			pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
+			relayUp = tunnel.NewMailbox(backup.Own).Ping(pingCtx) == nil
+			pingCancel()
+		}
+		googleWorks := tunnel.EnsureRoute(ctx, settingsPath(), &settings, nil)
+		if !googleWorks && !relayUp {
 			if ctx.Err() == nil {
 				setError("No working route to Google was found on this network.")
 			}
 			return
+		}
+		googleRoute := settings.Route()
+		google := tunnel.ClientRoute{Name: "Google", Own: settings.OwnMailbox(), Node: node}
+		routes := []tunnel.ClientRoute{google}
+		if hasBackup {
+			if relayUp && (settings.PreferRelay || !googleWorks) {
+				routes = []tunnel.ClientRoute{backup, google}
+			} else {
+				routes = []tunnel.ClientRoute{google, backup}
+			}
 		}
 		controller.Lock()
 		applySettings(settings)
@@ -268,11 +292,19 @@ func Start(tunFd int) string {
 		controller.Unlock()
 
 		tunnel.RunClient(ctx, tunnel.ClientOptions{
-			Own:      settings.OwnMailbox(),
-			Node:     node,
+			Routes:   routes,
 			Listener: listener,
 			OnStatus: setStatus,
-			FakeDNS:  tunnel.NewFakeDNS(),
+			OnRoute: func(name string) {
+				controller.Lock()
+				if name == "Google" {
+					controller.state.Route = googleRoute.FrontDomain + " via " + googleRoute.GoogleIP
+				} else {
+					controller.state.Route = "Backup relay"
+				}
+				controller.Unlock()
+			},
+			FakeDNS: tunnel.NewFakeDNS(),
 		})
 	}()
 	return ""
