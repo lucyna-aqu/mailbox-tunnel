@@ -13,7 +13,7 @@ jobs:
         with:
           go-version-file: mobile/go.mod
           cache-dependency-path: mobile/go.sum
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
