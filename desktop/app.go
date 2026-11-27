@@ -371,7 +371,9 @@ func (a *App) Connect() string {
 	if running {
 		return ""
 	}
+	a.settingsMutex.Lock()
 	settings, err := tunnel.LoadSettings(a.settingsPath)
+	a.settingsMutex.Unlock()
 	if err != nil {
 		return "Enter your settings first."
 	}

@@ -159,14 +159,21 @@ function showMessage(id, text, bad) {
   message.textContent = translate(text);
 }
 
+const maxLogLines = 300;
+const logLines = [];
+
 function appendLog(line) {
+  logLines.push(line);
+  if (logLines.length > maxLogLines) {
+    logLines.splice(0, logLines.length - maxLogLines);
+  }
   const log = $("log");
-  log.textContent += line + "\n";
+  log.textContent = logLines.join("\n") + "\n";
   log.scrollTop = log.scrollHeight;
 }
 
 async function tick() {
-  render(current);
+  $("timer").textContent = current.connectedAt ? formatDuration(Date.now() - current.connectedAt) : "—";
   const traffic = await backend().Traffic();
   const now = Date.now();
   const live = current.status !== "disconnected";
