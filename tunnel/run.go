@@ -45,6 +45,8 @@ type ClientOptions struct {
 
 // RunClient serves proxy connections until ctx ends, starting a new client run whenever the node loses the current one.
 func RunClient(ctx context.Context, options ClientOptions) {
+	ResetTrafficTotals()
+	ResetLatency()
 	onStatus := options.OnStatus
 	if onStatus == nil {
 		onStatus = func(Status) {}
@@ -115,13 +117,24 @@ func RunNode(ctx context.Context, registry MailboxConfig, nodeKey, statusListen 
 	server := NewNodeServer(NewMailbox(registry), userConfig, privateKey, publicKey)
 
 	if statusListen != "" {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			fmt.Fprintf(w, "mailbox-tunnel node\nactive sessions: %d\n\n%s\n", server.SessionCount(), info)
+		})
+		statusServer := &http.Server{
+			Addr:              statusListen,
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 		go func() {
-			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				fmt.Fprintf(w, "mailbox-tunnel node\nactive sessions: %d\n\n%s\n", server.SessionCount(), info)
-			})
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			statusServer.Shutdown(shutdownCtx)
+		}()
+		go func() {
 			log.Printf("status page on %s", statusListen)
-			if err := http.ListenAndServe(statusListen, handler); err != nil {
+			if err := statusServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("status page: %v", err)
 			}
 		}()

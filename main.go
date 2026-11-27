@@ -51,6 +51,7 @@ func main() {
 		return
 	}
 	relay := *mode == "relay"
+	var relayListener net.Listener
 	if relay {
 		// A relay serves its own mailbox and runs a node on it, for a server such as a GitHub codespace.
 		// Its deployment is the public host name that clients reach the mailbox at.
@@ -60,13 +61,11 @@ func main() {
 		if *deploymentID == "" || *authKey == "" {
 			log.Fatal("relay: set -deployment to this server's public host name, and -key")
 		}
-		listener, err := net.Listen("tcp", *listen)
+		var err error
+		relayListener, err = net.Listen("tcp", *listen)
 		if err != nil {
 			log.Fatal(err)
 		}
-		go func() {
-			log.Fatal(http.Serve(listener, tunnel.NewMailboxServer(*authKey)))
-		}()
 		*mode = "node"
 	}
 	if (*mode != "client" && *mode != "node" && *mode != "scan") || *deploymentID == "" || *authKey == "" {
@@ -83,6 +82,23 @@ func main() {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, *duration)
 		defer cancel()
+	}
+	if relayListener != nil {
+		relayServer := &http.Server{
+			Handler:           tunnel.NewMailboxServer(*authKey),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			relayServer.Shutdown(shutdownCtx)
+		}()
+		go func() {
+			if err := relayServer.Serve(relayListener); err != nil && err != http.ErrServerClosed {
+				log.Fatal(err)
+			}
+		}()
 	}
 
 	config := tunnel.MailboxConfig{DeploymentID: *deploymentID, AuthKey: *authKey, GoogleIP: *googleIP, FrontDomain: *frontDomain}
@@ -104,7 +120,13 @@ func main() {
 	// A relay's public port may open a little later, for example once a codespace port is made public.
 	for relay && err != nil && ctx.Err() == nil && time.Since(started) < 5*time.Minute {
 		log.Printf("relay: public address not reachable yet (%v), retrying", err)
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		err = tunnel.NewMailbox(config).Ping(ctx)
 	}
 	backupRoute, hasBackup := tunnel.RelayRoute(*backup)

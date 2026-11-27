@@ -20,6 +20,9 @@ func socks5Handshake(conn net.Conn) (string, byte, error) {
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return "", 0, err
 	}
+	if header[0] != 5 {
+		return "", 0, errors.New("unsupported SOCKS version")
+	}
 	if _, err := io.ReadFull(conn, make([]byte, header[1])); err != nil {
 		return "", 0, err
 	}
@@ -30,6 +33,9 @@ func socks5Handshake(conn net.Conn) (string, byte, error) {
 	request := make([]byte, 4)
 	if _, err := io.ReadFull(conn, request); err != nil {
 		return "", 0, err
+	}
+	if request[0] != 5 {
+		return "", 0, errors.New("unsupported SOCKS version")
 	}
 	command := request[1]
 	if command != socksConnect && command != socksUDPAssociate {
@@ -44,12 +50,17 @@ func socks5Handshake(conn net.Conn) (string, byte, error) {
 	if _, err := io.ReadFull(conn, port); err != nil {
 		return "", 0, err
 	}
+	portNumber := binary.BigEndian.Uint16(port)
+	if command == socksConnect && (host == "" || portNumber == 0) {
+		conn.Write([]byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
+		return "", 0, errors.New("invalid SOCKS target")
+	}
 	if command == socksConnect {
 		if _, err := conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
 			return "", 0, err
 		}
 	}
-	return net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(port)))), command, nil
+	return net.JoinHostPort(host, strconv.Itoa(int(portNumber))), command, nil
 }
 
 func readSocksAddress(reader io.Reader, addressType byte) (string, error) {

@@ -27,6 +27,10 @@ func httpProxyHandshake(conn net.Conn, reader *bufio.Reader) (string, []byte, er
 		return "", nil, err
 	}
 	if request.Method == http.MethodConnect {
+		if request.URL.Host == "" {
+			io.WriteString(conn, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+			return "", nil, errors.New("missing CONNECT host")
+		}
 		if _, err := io.WriteString(conn, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
 			return "", nil, err
 		}

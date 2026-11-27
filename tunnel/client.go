@@ -58,6 +58,8 @@ func NewClient(own MailboxConfig, node NodeInfo) (*Client, error) {
 	}
 	client.Endpoint = newEndpoint(client.mailbox, runID, "up", "down", client.onFrame, up, down,
 		endpointShape{maxBatch: smallBatchBytes, window: uploadWindowBytes, sendParallelism: uploadParallelism, receiveWindow: downloadParallelism})
+	client.countTraffic = true
+	client.sender.onSent = func(n int64) { bytesFromApps.Add(n) }
 	return client, nil
 }
 
@@ -142,8 +144,11 @@ func (c *Client) register(ctx context.Context, refresh bool) (bool, error) {
 	return string(ack) == "known", nil
 }
 
+const proxyHandshakeTimeout = 15 * time.Second
+
 // handle serves one local connection, speaking SOCKS5 or HTTP proxy depending on its first byte.
 func (c *Client) handle(conn net.Conn) {
+	conn.SetDeadline(time.Now().Add(proxyHandshakeTimeout))
 	reader := bufio.NewReader(conn)
 	first, err := reader.Peek(1)
 	if err != nil {
@@ -163,6 +168,7 @@ func (c *Client) handle(conn net.Conn) {
 		conn.Close()
 		return
 	}
+	conn.SetDeadline(time.Time{})
 	if command == socksUDPAssociate {
 		c.serveDNSAssociation(buffered)
 		return
@@ -171,6 +177,9 @@ func (c *Client) handle(conn net.Conn) {
 	c.streamMutex.Lock()
 	streamID := c.nextStreamID
 	c.nextStreamID++
+	if c.nextStreamID == 0 {
+		c.nextStreamID = 1
+	}
 	c.streamMutex.Unlock()
 	box := c.openStream(streamID)
 	c.sender.Send(streamID, frameOpen, []byte(target))
