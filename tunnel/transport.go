@@ -14,8 +14,9 @@ const (
 	frameData  byte = 2
 	frameClose byte = 3
 
-	frameHeaderSize = 9
-	maxBacklogBytes = 3_000_000
+	frameHeaderSize      = 9
+	maxFramePayloadBytes = 4 << 20
+	maxBacklogBytes      = 3_000_000
 
 	// Each mailbox call costs about a second on Google's side however much it carries, so bulk downloads go in large batches.
 	// Uploads stay small, since Iran's slow uplinks would make a large batch hold up everything behind it.
@@ -60,10 +61,16 @@ type frameParser struct {
 func (p *frameParser) feed(data []byte) {
 	p.buffer = append(p.buffer, data...)
 	for len(p.buffer) >= frameHeaderSize {
-		length := int(binary.BigEndian.Uint32(p.buffer[5:9]))
+		rawLength := binary.BigEndian.Uint32(p.buffer[5:9])
+		if rawLength > maxFramePayloadBytes {
+			log.Printf("frame payload too large (%d bytes), dropping buffer", rawLength)
+			p.buffer = nil
+			return
+		}
+		length := int(rawLength)
 		end := frameHeaderSize + length
 		if len(p.buffer) < end {
-			return
+			break
 		}
 		payload := append([]byte(nil), p.buffer[frameHeaderSize:end]...)
 		p.onFrame(binary.BigEndian.Uint32(p.buffer[0:4]), p.buffer[4], payload)
@@ -71,13 +78,17 @@ func (p *frameParser) feed(data []byte) {
 	}
 	if len(p.buffer) == 0 {
 		p.buffer = nil
+	} else if cap(p.buffer) > 64*1024 && len(p.buffer) < cap(p.buffer)/2 {
+		p.buffer = append([]byte(nil), p.buffer...)
 	}
 }
 
 type sentBatch struct {
-	data    []byte
-	putting bool      // a put is in flight
-	lastPut time.Time // when the last put finished
+	data         []byte
+	payloadBytes int64
+	counted      bool
+	putting      bool      // a put is in flight
+	lastPut      time.Time // when the last put finished
 }
 
 // Sender batches outgoing frames under sequence keys and keeps each batch until the receiver has taken it.
@@ -90,6 +101,7 @@ type Sender struct {
 	maxBatch  int
 	window    int // most bytes sealed ahead of the receiver
 	dropEvery int // loss testing
+	onSent    func(int64)
 
 	mutex           sync.Mutex
 	queues          map[uint32][][]byte // encoded frames waiting, by stream
@@ -181,16 +193,22 @@ func (s *Sender) Drop(streamID uint32, stillRunning bool) {
 }
 
 // takeFrames builds a batch of whole frames, one frame from each waiting stream in turn; the caller holds the mutex.
-func (s *Sender) takeFrames(limit int) []byte {
+// It also returns the number of frameData payload bytes included in the batch.
+func (s *Sender) takeFrames(limit int) ([]byte, int64) {
 	var batch []byte
+	var payloadBytes int64
 	for len(s.order) > 0 {
 		streamID := s.order[0]
 		queue := s.queues[streamID]
-		if len(batch) > 0 && len(batch)+len(queue[0]) > limit {
+		frame := queue[0]
+		if len(batch) > 0 && len(batch)+len(frame) > limit {
 			break
 		}
-		batch = append(batch, queue[0]...)
-		s.pendingBytes -= len(queue[0])
+		batch = append(batch, frame...)
+		if len(frame) >= frameHeaderSize && frame[4] == frameData {
+			payloadBytes += int64(len(frame) - frameHeaderSize)
+		}
+		s.pendingBytes -= len(frame)
 		s.order = s.order[1:]
 		if len(queue) > 1 {
 			s.queues[streamID] = queue[1:]
@@ -199,7 +217,7 @@ func (s *Sender) takeFrames(limit int) []byte {
 			delete(s.queues, streamID)
 		}
 	}
-	return batch
+	return batch, payloadBytes
 }
 
 // Backlog counts unsent bytes plus bytes the receiver has not taken yet.
@@ -249,11 +267,12 @@ func (s *Sender) Run(ctx context.Context) {
 			}
 			sequence := s.nextSequence
 			s.nextSequence++
-			batch := s.cipher.seal(sequence, s.takeFrames(limit))
+			frames, payloadBytes := s.takeFrames(limit)
+			batch := s.cipher.seal(sequence, frames)
 			if len(s.retained) == 0 {
 				s.progressMovedAt = time.Now()
 			}
-			s.retained[sequence] = &sentBatch{data: batch, putting: true}
+			s.retained[sequence] = &sentBatch{data: batch, payloadBytes: payloadBytes, putting: true}
 			s.retainedBytes += len(batch)
 			s.mutex.Unlock()
 			if s.dropEvery > 0 && sequence%s.dropEvery == s.dropEvery-1 {
@@ -305,6 +324,7 @@ func (s *Sender) deliver(ctx context.Context, sequence int, batch []byte) {
 			log.Printf("trace put %s %dB %dms in-flight %d", key, len(batch), time.Since(started).Milliseconds(), len(s.slots))
 		}
 		if err == nil {
+			s.markSent(sequence)
 			s.updateProgress(progress)
 			return
 		}
@@ -312,7 +332,24 @@ func (s *Sender) deliver(ctx context.Context, sequence int, batch []byte) {
 			return
 		}
 		log.Printf("put %s failed (%v)", key, err)
-		time.Sleep(time.Duration(attempt+1) * time.Second)
+		sleepContext(ctx, time.Duration(attempt+1)*time.Second)
+	}
+}
+
+// markSent reports a batch's application payload bytes once, on its first successful delivery to the mailbox.
+func (s *Sender) markSent(sequence int) {
+	if s.onSent == nil {
+		return
+	}
+	s.mutex.Lock()
+	var payloadBytes int64
+	if batch, ok := s.retained[sequence]; ok && !batch.counted {
+		batch.counted = true
+		payloadBytes = batch.payloadBytes
+	}
+	s.mutex.Unlock()
+	if payloadBytes > 0 {
+		s.onSent(payloadBytes)
 	}
 }
 
@@ -466,7 +503,7 @@ func (r *Receiver) fetch(ctx context.Context, sequence int, result chan<- []byte
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("wait %s failed (%v), retrying", key, err)
-				time.Sleep(2 * time.Second)
+				sleepContext(ctx, 2*time.Second)
 			}
 			continue
 		}
@@ -476,7 +513,7 @@ func (r *Receiver) fetch(ctx context.Context, sequence int, result chan<- []byte
 		plain, err := r.cipher.open(sequence, value)
 		if err != nil {
 			log.Printf("%s: %v", key, err)
-			time.Sleep(2 * time.Second)
+			sleepContext(ctx, 2*time.Second)
 			continue
 		}
 		result <- plain

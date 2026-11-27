@@ -27,13 +27,21 @@ func TestTakeFramesLetsAShortReplyPassALongDownload(t *testing.T) {
 		sender.Send(1, frameData, []byte(fmt.Sprintf("bulk%d", i)))
 	}
 	sender.Send(2, frameData, []byte("reply"))
-	got := framesIn(sender.takeFrames(3 * (frameHeaderSize + 5)))
+	batch, payloadBytes := sender.takeFrames(3 * (frameHeaderSize + 5))
+	got := framesIn(batch)
 	want := []string{"1:bulk0", "2:reply", "1:bulk1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("first batch %v, want %v", got, want)
 	}
-	if got := framesIn(sender.takeFrames(largeBatchBytes)); fmt.Sprint(got) != "[1:bulk2 1:bulk3 1:bulk4]" {
+	if payloadBytes != 15 {
+		t.Fatalf("payloadBytes = %d, want 15", payloadBytes)
+	}
+	rest, restBytes := sender.takeFrames(largeBatchBytes)
+	if got := framesIn(rest); fmt.Sprint(got) != "[1:bulk2 1:bulk3 1:bulk4]" {
 		t.Fatalf("second batch %v, want the rest of stream 1 in order", got)
+	}
+	if restBytes != 15 {
+		t.Fatalf("restBytes = %d, want 15", restBytes)
 	}
 }
 
@@ -43,8 +51,12 @@ func TestDropDiscardsWaitingAndLaterFrames(t *testing.T) {
 	sender.Send(2, frameData, []byte("keep"))
 	sender.Drop(1, true)
 	sender.Send(1, frameData, []byte("late"))
-	if got := framesIn(sender.takeFrames(largeBatchBytes)); fmt.Sprint(got) != "[2:keep]" {
+	batch, payloadBytes := sender.takeFrames(largeBatchBytes)
+	if got := framesIn(batch); fmt.Sprint(got) != "[2:keep]" {
 		t.Fatalf("batch %v, want only stream 2", got)
+	}
+	if payloadBytes != 4 {
+		t.Fatalf("payloadBytes = %d, want 4", payloadBytes)
 	}
 	if sender.pending() != 0 {
 		t.Fatalf("pending %d bytes, want 0", sender.pending())
@@ -62,5 +74,30 @@ func TestDropOfAFinishedStreamLeavesNoMark(t *testing.T) {
 	sender.Drop(1, false)
 	if sender.pending() != 0 || len(sender.dropped) != 0 {
 		t.Fatalf("pending %d, marks %d, want both 0", sender.pending(), len(sender.dropped))
+	}
+}
+
+func TestMarkSentCountsBatchOnceAcrossRetransmits(t *testing.T) {
+	sender := newTestSender()
+	var total int64
+	sender.onSent = func(n int64) { total += n }
+	sender.retained[0] = &sentBatch{data: []byte("sealed"), payloadBytes: 1234}
+	sender.markSent(0)
+	sender.markSent(0) // retransmit must not double-count
+	if total != 1234 {
+		t.Fatalf("counted %d bytes, want 1234", total)
+	}
+}
+
+func TestFrameParserRejectsOversizedFrame(t *testing.T) {
+	called := false
+	parser := &frameParser{onFrame: func(uint32, byte, []byte) { called = true }}
+	badHeader := []byte{0, 0, 0, 1, frameData, 0xff, 0xff, 0xff, 0xff}
+	parser.feed(badHeader)
+	if called {
+		t.Fatal("oversized frame should not invoke callback")
+	}
+	if parser.buffer != nil {
+		t.Fatalf("expected buffer cleared after oversized frame, got %d bytes", len(parser.buffer))
 	}
 }

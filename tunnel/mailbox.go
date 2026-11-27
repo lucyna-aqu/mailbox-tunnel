@@ -290,6 +290,13 @@ func Latency() time.Duration {
 	return latency.average
 }
 
+// ResetLatency clears the moving average round trip time for a new client connection.
+func ResetLatency() {
+	latency.Lock()
+	defer latency.Unlock()
+	latency.average = 0
+}
+
 // do sends one request; if it goes silent, its watch gives up on the whole call through cancel.
 func (m *Mailbox) do(ctx context.Context, cancel context.CancelFunc, method, rawURL string, body []byte, answerWithin time.Duration) (int, string, []byte, error) {
 	target, err := url.Parse(rawURL)
