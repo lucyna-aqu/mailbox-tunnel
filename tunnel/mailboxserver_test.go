@@ -80,3 +80,23 @@ func TestMailboxServerWaitKeepsTheValueUntilAcked(t *testing.T) {
 		t.Fatalf("wait after the ack got %v, want nothing", reply)
 	}
 }
+
+func TestMailboxServerRejectsBadKeyAndTracksBytes(t *testing.T) {
+	ms := NewMailboxServer("secret")
+	server := httptest.NewServer(ms)
+	defer server.Close()
+
+	reply := postToServer(t, server.URL, map[string]any{"k": "secret", "op": "put", "key": "", "value": "x"}, false)
+	if reply["error"] != "bad key" {
+		t.Fatalf("empty key got %v, want bad key", reply)
+	}
+	postToServer(t, server.URL, map[string]any{"k": "secret", "op": "put", "key": "k1", "value": "hello"}, false)
+	postToServer(t, server.URL, map[string]any{"k": "secret", "op": "put", "key": "k1", "value": "hi"}, false)
+	if ms.totalBytes != 4 {
+		t.Fatalf("totalBytes after overwrite = %d, want 4", ms.totalBytes)
+	}
+	postToServer(t, server.URL, map[string]any{"k": "secret", "op": "take", "key": "k1", "timeoutMs": 100}, false)
+	if ms.totalBytes != 0 {
+		t.Fatalf("totalBytes after take = %d, want 0", ms.totalBytes)
+	}
+}

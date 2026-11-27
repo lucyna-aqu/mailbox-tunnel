@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	serverValueTTL = 10 * time.Minute
-	serverMaxWait  = 5 * time.Minute
-	serverMaxBody  = 16 << 20
+	serverValueTTL      = 10 * time.Minute
+	serverMaxWait       = 5 * time.Minute
+	serverMaxBody       = 16 << 20
+	serverMaxTotalBytes = 128 << 20
+	serverMaxKeyLen     = 256
 )
 
 // MailboxServer is a self-hosted mailbox that speaks the same protocol as the Apps Script one.
@@ -23,10 +25,11 @@ const (
 type MailboxServer struct {
 	authKey string
 
-	mutex   sync.Mutex
-	values  map[string]serverValue
-	changed chan struct{} // closed and replaced whenever a value is stored
-	swept   time.Time
+	mutex      sync.Mutex
+	values     map[string]serverValue
+	totalBytes int64
+	changed    chan struct{} // closed and replaced whenever a value is stored
+	swept      time.Time
 }
 
 type serverValue struct {
@@ -78,14 +81,21 @@ func (s *MailboxServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		writeReply(w, map[string]any{"ok": true, "version": 2})
 	case "put":
-		s.store(request.Key, request.Value)
+		if request.Key == "" || len(request.Key) > serverMaxKeyLen {
+			writeReply(w, map[string]any{"error": "bad key"})
+			return
+		}
+		if !s.store(request.Key, request.Value) {
+			writeReply(w, map[string]any{"error": "mailbox full"})
+			return
+		}
 		writeReply(w, map[string]any{"ok": true, "progress": s.progress(request.ProgressKey)})
 	case "status":
 		writeReply(w, map[string]any{"ok": true, "progress": s.progress(request.ProgressKey)})
 	// Read without removing; the receiver acks keys on its next call.
 	case "wait":
 		s.remove(request.Ack)
-		if request.ProgressKey != "" && request.Progress != nil {
+		if request.ProgressKey != "" && len(request.ProgressKey) <= serverMaxKeyLen && request.Progress != nil {
 			s.store(request.ProgressKey, strconv.Itoa(*request.Progress))
 		}
 		writeReply(w, map[string]any{"ok": true, "value": s.waitFor(r.Context(), request.Key, request.TimeoutMs, false)})
@@ -96,29 +106,55 @@ func (s *MailboxServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// store keeps a value and wakes every waiter, sweeping out expired values once a minute.
-func (s *MailboxServer) store(key, value string) {
+// sweep removes expired values; the caller holds the mutex.
+func (s *MailboxServer) sweep(now time.Time) {
+	for name, stored := range s.values {
+		if now.After(stored.expires) {
+			s.totalBytes -= int64(len(name) + len(stored.value))
+			delete(s.values, name)
+		}
+	}
+	s.swept = now
+}
+
+// store keeps a value and wakes every waiter, sweeping out expired values periodically or when near capacity.
+func (s *MailboxServer) store(key, value string) bool {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	now := time.Now()
 	if now.Sub(s.swept) > time.Minute {
-		for name, stored := range s.values {
-			if now.After(stored.expires) {
-				delete(s.values, name)
-			}
-		}
-		s.swept = now
+		s.sweep(now)
 	}
+	entrySize := int64(len(key) + len(value))
+	var oldSize int64
+	if prev, ok := s.values[key]; ok {
+		oldSize = int64(len(key) + len(prev.value))
+	}
+	if s.totalBytes-oldSize+entrySize > serverMaxTotalBytes {
+		s.sweep(now)
+		oldSize = 0
+		if prev, ok := s.values[key]; ok {
+			oldSize = int64(len(key) + len(prev.value))
+		}
+		if s.totalBytes-oldSize+entrySize > serverMaxTotalBytes {
+			return false
+		}
+	}
+	s.totalBytes = s.totalBytes - oldSize + entrySize
 	s.values[key] = serverValue{value: value, expires: now.Add(serverValueTTL)}
 	close(s.changed)
 	s.changed = make(chan struct{})
+	return true
 }
 
 func (s *MailboxServer) remove(keys []string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	for _, key := range keys {
-		delete(s.values, key)
+		if prev, ok := s.values[key]; ok {
+			s.totalBytes -= int64(len(key) + len(prev.value))
+			delete(s.values, key)
+		}
 	}
 }
 
@@ -161,6 +197,7 @@ func (s *MailboxServer) waitFor(ctx context.Context, key string, timeoutMs int, 
 		s.mutex.Lock()
 		value, ok := s.lookup(key)
 		if ok && remove {
+			s.totalBytes -= int64(len(key) + len(value))
 			delete(s.values, key)
 		}
 		changed := s.changed
