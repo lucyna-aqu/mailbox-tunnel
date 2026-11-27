@@ -219,3 +219,9 @@ See [`.github/workflows/android.yml`](.github/workflows/android.yml) for the exa
 - **What Google sees:** Encrypted binary blobs (base64-encoded ChaCha20-Poly1305 ciphertext), request timings, and payload sizes. Google cannot read tunnel traffic or see target hostnames/IPs.
 - **What the node sees:** The exit node decrypts your tunnel streams and opens outbound TCP connections on your behalf, so it sees destination hostnames/IPs (just like any standard proxy or VPN exit). End-to-end HTTPS/TLS inside your browser remains encrypted between you and the destination website.
 - **Keep secrets safe:** Never commit `.env` or share `MAILBOX_NODE_KEY` or your personal mailbox `AUTH_KEY`. Sharing `mtn://...` only shares the node's registration mailbox and public key so users can register securely.
+
+---
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
