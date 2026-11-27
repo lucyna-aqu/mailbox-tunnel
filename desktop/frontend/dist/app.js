@@ -172,14 +172,20 @@ async function tick() {
   const live = current.status !== "disconnected";
   if (lastTraffic && live) {
     const seconds = (now - lastTraffic.time) / 1000;
-    $("rate-down").textContent = formatRate((traffic.received - lastTraffic.received) / seconds);
-    $("rate-up").textContent = formatRate((traffic.sent - lastTraffic.sent) / seconds);
+    const deltaDown = traffic.received - lastTraffic.received;
+    const deltaUp = traffic.sent - lastTraffic.sent;
+    if (seconds > 0 && deltaDown >= 0 && deltaUp >= 0) {
+      $("rate-down").textContent = formatRate(deltaDown / seconds);
+      $("rate-up").textContent = formatRate(deltaUp / seconds);
+    } else {
+      $("rate-down").textContent = $("rate-up").textContent = "0 B/s";
+    }
   } else {
     $("rate-down").textContent = $("rate-up").textContent = "0 B/s";
   }
   $("total").textContent = formatSize(traffic.received + traffic.sent);
   $("ping").textContent = live && traffic.latencyMs > 0 ? traffic.latencyMs + " ms" : "—";
-  lastTraffic = { ...traffic, time: now };
+  lastTraffic = live ? { ...traffic, time: now } : null;
 }
 
 document.querySelectorAll(".nav").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.page)));

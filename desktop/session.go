@@ -78,8 +78,10 @@ func (a *App) watchSessionEnd() {
 // endSession restores the proxy first, because Windows gives a closing app only a few seconds.
 func (a *App) endSession() {
 	log.Printf("windows is ending the session, restoring the system proxy")
+	a.settingsMutex.Lock()
 	if saved, err := tunnel.LoadSettings(a.settingsPath); err == nil {
 		tunnel.RestoreLeftoverProxy(a.settingsPath, &saved)
 	}
+	a.settingsMutex.Unlock()
 	a.Disconnect()
 }

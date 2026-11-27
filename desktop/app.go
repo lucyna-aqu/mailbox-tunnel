@@ -122,13 +122,10 @@ func (a *App) startup(ctx context.Context) {
 
 // SetAutoConnect saves whether the app connects as soon as it starts.
 func (a *App) SetAutoConnect(enabled bool) {
-	settings, err := tunnel.LoadSettings(a.settingsPath)
-	if err != nil {
-		return
-	}
-	settings.AutoConnect = enabled
-	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
-		a.setError(err.Error())
+	if err := a.updateSettings(func(s *tunnel.Settings) { s.AutoConnect = enabled }); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			a.setError(err.Error())
+		}
 		return
 	}
 	a.mutex.Lock()
@@ -140,7 +137,13 @@ func (a *App) SetAutoConnect(enabled bool) {
 // watchForUpdates looks for a newer release now and every few hours; a failed check changes nothing.
 func (a *App) watchForUpdates() {
 	for {
-		if update, err := tunnel.CheckForUpdate(context.Background(), updateRepo); err != nil {
+		if a.ctx.Err() != nil {
+			return
+		}
+		if update, err := tunnel.CheckForUpdate(a.ctx, updateRepo); err != nil {
+			if a.ctx.Err() != nil {
+				return
+			}
 			log.Printf("update check: %v", err)
 		} else {
 			a.mutex.Lock()
@@ -148,7 +151,11 @@ func (a *App) watchForUpdates() {
 			a.mutex.Unlock()
 			a.publish()
 		}
-		time.Sleep(6 * time.Hour)
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-time.After(6 * time.Hour):
+		}
 	}
 }
 
@@ -164,13 +171,10 @@ func (a *App) OpenUpdate() {
 
 // SetPreferRelay saves whether connecting tries the relay before Google. It applies from the next connect.
 func (a *App) SetPreferRelay(enabled bool) {
-	settings, err := tunnel.LoadSettings(a.settingsPath)
-	if err != nil {
-		return
-	}
-	settings.PreferRelay = enabled
-	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
-		a.setError(err.Error())
+	if err := a.updateSettings(func(s *tunnel.Settings) { s.PreferRelay = enabled }); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			a.setError(err.Error())
+		}
 		return
 	}
 	a.mutex.Lock()
@@ -181,13 +185,10 @@ func (a *App) SetPreferRelay(enabled bool) {
 
 // SetEnvProxy saves whether connecting also sets HTTPS_PROXY and friends for command-line tools. It applies from the next connect.
 func (a *App) SetEnvProxy(enabled bool) {
-	settings, err := tunnel.LoadSettings(a.settingsPath)
-	if err != nil {
-		return
-	}
-	settings.SetEnvProxy = enabled
-	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
-		a.setError(err.Error())
+	if err := a.updateSettings(func(s *tunnel.Settings) { s.SetEnvProxy = enabled }); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			a.setError(err.Error())
+		}
 		return
 	}
 	a.mutex.Lock()
@@ -250,19 +251,33 @@ func (a *App) Logs() []string {
 // It returns an error message or "".
 func (a *App) SaveSettings(mailbox, node string) string {
 	// Keep the saved route and options; only the answers change.
+	a.settingsMutex.Lock()
 	settings, _ := tunnel.LoadSettings(a.settingsPath)
+	a.settingsMutex.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := tunnel.Setup(ctx, &settings, mailbox, node); err != nil {
 		return err.Error()
 	}
-	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+	fromSetupCode := strings.HasPrefix(strings.TrimSpace(mailbox), "mtc://")
+	a.settingsMutex.Lock()
+	current, _ := tunnel.LoadSettings(a.settingsPath)
+	current.DeploymentID, current.AuthKey, current.Node = settings.DeploymentID, settings.AuthKey, settings.Node
+	if fromSetupCode {
+		current.Backup = settings.Backup
+	}
+	err := tunnel.SaveSettings(a.settingsPath, current)
+	a.settingsMutex.Unlock()
+	if err != nil {
 		return err.Error()
 	}
 	a.mutex.Lock()
 	a.state.Configured = true
-	a.state.Node = nodeLabel(settings.Node)
-	a.state.Backup = settings.Backup != ""
+	a.state.Node = nodeLabel(current.Node)
+	a.state.Backup = current.Backup != ""
+	route := current.Route()
+	a.state.Route = route.FrontDomain + " via " + route.GoogleIP
 	a.mutex.Unlock()
 	a.publish()
 	return ""
@@ -270,7 +285,9 @@ func (a *App) SaveSettings(mailbox, node string) string {
 
 // SetupCode is the saved settings in one string, to set up another device; it is empty before setup.
 func (a *App) SetupCode() string {
+	a.settingsMutex.Lock()
 	settings, err := tunnel.LoadSettings(a.settingsPath)
+	a.settingsMutex.Unlock()
 	if err != nil || settings.DeploymentID == "" {
 		return ""
 	}
@@ -280,13 +297,15 @@ func (a *App) SetupCode() string {
 // SaveBackup checks a relay's node string and saves it as the backup route; an empty string removes the backup.
 // It returns an error message or "".
 func (a *App) SaveBackup(nodeString string) string {
-	settings, err := tunnel.LoadSettings(a.settingsPath)
+	a.settingsMutex.Lock()
+	_, err := tunnel.LoadSettings(a.settingsPath)
+	a.settingsMutex.Unlock()
 	if err != nil {
 		return "Enter your settings first."
 	}
-	settings.Backup = strings.TrimSpace(nodeString)
-	if settings.Backup != "" {
-		route, ok := tunnel.RelayRoute(settings.Backup)
+	backup := strings.TrimSpace(nodeString)
+	if backup != "" {
+		route, ok := tunnel.RelayRoute(backup)
 		if !ok {
 			return "That is not a relay's node string."
 		}
@@ -297,11 +316,19 @@ func (a *App) SaveBackup(nodeString string) string {
 			return "The relay did not answer. Check that it is running and its port is public."
 		}
 	}
-	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+	if err := a.updateSettings(func(s *tunnel.Settings) {
+		s.Backup = backup
+		if backup == "" {
+			s.PreferRelay = false
+		}
+	}); err != nil {
 		return err.Error()
 	}
 	a.mutex.Lock()
-	a.state.Backup = settings.Backup != ""
+	a.state.Backup = backup != ""
+	if backup == "" {
+		a.state.PreferRelay = false
+	}
 	a.mutex.Unlock()
 	a.publish()
 	return ""
@@ -353,6 +380,8 @@ func (a *App) Connect() string {
 		return "That is not a valid node string."
 	}
 
+	tunnel.ResetTrafficTotals()
+	tunnel.ResetLatency()
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	a.mutex.Lock()
@@ -419,7 +448,13 @@ func (a *App) Connect() string {
 			}
 		}
 		address := listener.Addr().String()
-		systemProxy := tunnel.PointSystemAt(a.settingsPath, &settings, address)
+		a.settingsMutex.Lock()
+		fresh, err := tunnel.LoadSettings(a.settingsPath)
+		if err != nil {
+			fresh = settings
+		}
+		systemProxy := tunnel.PointSystemAt(a.settingsPath, &fresh, address)
+		a.settingsMutex.Unlock()
 		a.mutex.Lock()
 		a.state.Address, a.state.SystemProxy = address, systemProxy
 		a.mutex.Unlock()
@@ -439,16 +474,20 @@ func (a *App) Connect() string {
 				}
 			},
 		})
+		a.settingsMutex.Lock()
 		if saved, err := tunnel.LoadSettings(a.settingsPath); err == nil {
 			tunnel.RestoreLeftoverProxy(a.settingsPath, &saved)
 		}
+		a.settingsMutex.Unlock()
 	}()
 	return ""
 }
 
 // FindRoute scans this network for the fastest working route to Google and saves it. It returns a message for the user.
 func (a *App) FindRoute() string {
+	a.settingsMutex.Lock()
 	settings, err := tunnel.LoadSettings(a.settingsPath)
+	a.settingsMutex.Unlock()
 	if err != nil {
 		return "Enter your settings first."
 	}
@@ -457,8 +496,9 @@ func (a *App) FindRoute() string {
 		return "No working route to Google was found on this network."
 	}
 	best := routes[0]
-	settings.GoogleIP, settings.FrontDomain = best.GoogleIP, best.FrontDomain
-	if err := tunnel.SaveSettings(a.settingsPath, settings); err != nil {
+	if err := a.updateSettings(func(s *tunnel.Settings) {
+		s.GoogleIP, s.FrontDomain = best.GoogleIP, best.FrontDomain
+	}); err != nil {
 		return err.Error()
 	}
 	a.setRoute(best)
@@ -508,13 +548,25 @@ func (a *App) Disconnect() {
 
 // ResetSettings deletes the saved settings so the setup form shows again.
 func (a *App) ResetSettings() {
+	a.CancelRelaySetup()
 	a.Disconnect()
-	if err := os.Remove(a.settingsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	a.settingsMutex.Lock()
+	err := os.Remove(a.settingsPath)
+	a.settingsMutex.Unlock()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		a.setError(err.Error())
 		return
 	}
 	a.mutex.Lock()
-	a.state.Configured, a.state.Node, a.state.Backup = false, "", false
+	a.state.Configured = false
+	a.state.Node = ""
+	a.state.Route = ""
+	a.state.AutoConnect = false
+	a.state.EnvProxy = false
+	a.state.Backup = false
+	a.state.PreferRelay = false
+	a.state.RelayManaged = false
+	a.state.Relay = RelaySetup{}
 	a.mutex.Unlock()
 	a.publish()
 }
