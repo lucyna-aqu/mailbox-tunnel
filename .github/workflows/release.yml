@@ -57,7 +57,11 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          VER="${TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+          CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
       - name: Test & build Windows desktop app
         working-directory: desktop
         shell: bash
@@ -95,7 +99,11 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          VER="${TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+          CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
       - name: Install gomobile
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
@@ -116,6 +124,8 @@ jobs:
       - name: Build APK
         working-directory: android
         env:
+          ANDROID_VERSION_NAME: ${{ steps.ver.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ steps.ver.outputs.code }}
           RELEASE_KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
