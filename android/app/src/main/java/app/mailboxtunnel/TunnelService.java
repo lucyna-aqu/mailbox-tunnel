@@ -1,8 +1,14 @@
 package app.mailboxtunnel;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
@@ -12,8 +18,10 @@ import app.mailboxtunnel.mobile.Mobile;
 public class TunnelService extends VpnService {
     static final String ACTION_STOP = "app.mailboxtunnel.STOP";
     private static final String TAG = "TunnelService";
+    private static final String CHANNEL_ID = "mailbox_tunnel_vpn";
+    private static final int NOTIFICATION_ID = 1;
 
-    private ParcelFileDescriptor tun;
+    private volatile boolean running;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -22,9 +30,11 @@ public class TunnelService extends VpnService {
             shutDown();
             return START_NOT_STICKY;
         }
-        if (tun != null) {
+        if (running) {
             return START_STICKY;
         }
+        startForegroundNotification();
+        ParcelFileDescriptor tun;
         try {
             tun = new Builder()
                     .setSession("mailbox-tunnel")
@@ -38,22 +48,58 @@ public class TunnelService extends VpnService {
                     .establish();
         } catch (PackageManager.NameNotFoundException | IllegalArgumentException | IllegalStateException e) {
             Log.e(TAG, "could not set up the VPN interface", e);
-            stopSelf();
+            shutDown();
             return START_NOT_STICKY;
         }
         if (tun == null) {
-            stopSelf();
+            shutDown();
             return START_NOT_STICKY;
         }
+        running = true;
         // Start may first wait for an earlier connection to stop, so it stays off the main thread.
         int fd = tun.detachFd();
         new Thread(() -> {
             String error = Mobile.start(fd);
             if (!error.isEmpty()) {
                 Log.e(TAG, error);
+                shutDown();
             }
         }).start();
         return START_STICKY;
+    }
+
+    private void startForegroundNotification() {
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID,
+                    "Mailbox Tunnel",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
+            builder = new Notification.Builder(this, CHANNEL_ID);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+        Intent openIntent = new Intent(this, MainActivity.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                this, 0, openIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
+        Notification notification = builder
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("Mailbox Tunnel")
+                .setContentText("VPN active")
+                .setOngoing(true)
+                .setContentIntent(contentIntent)
+                .build();
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
     }
 
     @Override
@@ -63,13 +109,15 @@ public class TunnelService extends VpnService {
 
     @Override
     public void onDestroy() {
+        running = false;
         new Thread(Mobile::stop).start();
         super.onDestroy();
     }
 
     private void shutDown() {
         // Go owns the file descriptor after detachFd and closes it when it stops.
-        tun = null;
+        running = false;
+        stopForeground(STOP_FOREGROUND_REMOVE);
         new Thread(Mobile::stop).start();
         stopSelf();
     }

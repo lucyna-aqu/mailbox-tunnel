@@ -1,12 +1,18 @@
 package app.mailboxtunnel;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Insets;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.Bundle;
+import android.view.WindowInsets;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -20,6 +26,7 @@ import app.mailboxtunnel.mobile.Mobile;
 /** Shows the shared web interface and connects its calls to the Go core. */
 public class MainActivity extends Activity {
     private static final int VPN_REQUEST = 1;
+    private static final int NOTIFY_REQUEST = 2;
 
     private final ExecutorService worker = Executors.newCachedThreadPool();
     private WebView webView;
@@ -29,13 +36,34 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         Mobile.setDataDir(getFilesDir().getAbsolutePath());
 
+        FrameLayout container = new FrameLayout(this);
+        container.setBackgroundColor(0xFF0A1218);
+        container.setOnApplyWindowInsetsListener((view, insets) -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            } else {
+                view.setPadding(
+                        insets.getSystemWindowInsetLeft(),
+                        insets.getSystemWindowInsetTop(),
+                        insets.getSystemWindowInsetRight(),
+                        insets.getSystemWindowInsetBottom()
+                );
+            }
+            return insets;
+        });
+
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         webView.setBackgroundColor(0xFF101C24);
         webView.addJavascriptInterface(new Bridge(), "AndroidBridge");
         webView.loadUrl("file:///android_asset/web/index.html");
-        setContentView(webView);
+        container.addView(webView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        setContentView(container);
 
         if (savedInstanceState == null) {
             try {
@@ -50,19 +78,37 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onDestroy() {
+        worker.shutdownNow();
+        super.onDestroy();
+    }
+
+    @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == VPN_REQUEST && resultCode == RESULT_OK) {
-            startService(new Intent(this, TunnelService.class));
+            startTunnelService();
+        }
+    }
+
+    private void startTunnelService() {
+        Intent intent = new Intent(this, TunnelService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
         }
     }
 
     private void connect() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFY_REQUEST);
+        }
         Intent consent = VpnService.prepare(this);
         if (consent != null) {
             startActivityForResult(consent, VPN_REQUEST);
         } else {
-            startService(new Intent(this, TunnelService.class));
+            startTunnelService();
         }
     }
 
