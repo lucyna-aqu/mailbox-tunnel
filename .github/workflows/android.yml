@@ -35,20 +35,33 @@ jobs:
         run: |
           mkdir -p android/app/src/main/assets/web
           cp -r desktop/frontend/dist/. android/app/src/main/assets/web/
-      - name: Use the shared signing key
-        env:
-          DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
-        run: |
-          if [ -n "$DEBUG_KEYSTORE" ]; then
-            mkdir -p ~/.android
-            echo "$DEBUG_KEYSTORE" | base64 -d > ~/.android/debug.keystore
-          fi
       - name: Build the APK
         working-directory: android
+        env:
+          RELEASE_KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
         run: |
-          gradle assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../mailbox-tunnel.apk
+          if [ -n "$RELEASE_KEYSTORE" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+            echo "$RELEASE_KEYSTORE" | base64 -d > "$ANDROID_KEYSTORE_PATH"
+            gradle assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../mailbox-tunnel.apk
+          else
+            echo "::notice::Release keystore secrets not set; falling back to debug APK."
+            if [ -n "$DEBUG_KEYSTORE" ]; then
+              mkdir -p ~/.android
+              echo "$DEBUG_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+            fi
+            gradle assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../mailbox-tunnel.apk
+          fi
+          sha256sum ../mailbox-tunnel.apk > ../mailbox-tunnel.apk.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: mailbox-tunnel-apk
-          path: mailbox-tunnel.apk
+          path: |
+            mailbox-tunnel.apk
+            mailbox-tunnel.apk.sha256
